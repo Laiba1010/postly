@@ -1,17 +1,22 @@
 import {
   Body,
   Controller,
+  Get,
   HttpCode,
   HttpStatus,
   Post,
   Req,
   Res,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { ConfigService } from '@nestjs/config';
 import { AuthService } from './auth.service';
 import { SignupDto } from './dto/signup.dto';
 import { LoginDto } from './dto/login.dto';
+import { AuthGuard } from './guards/auth.guard';
+import { CurrentUser } from './decorators/current-user.decorator';
+import type { PublicUser } from './auth.service';
 
 const SESSION_COOKIE_NAME = 'sid';
 
@@ -30,7 +35,7 @@ export class AuthController {
       httpOnly: true,
       secure: isProduction,
       sameSite: 'lax',
-      maxAge: 1000 * 60 * 60 * 24 * 7, // 7 days
+      maxAge: 1000 * 60 * 60 * 24 * 7,
       path: '/',
     });
   }
@@ -73,5 +78,12 @@ export class AuthController {
     }
     res.clearCookie(SESSION_COOKIE_NAME, { path: '/' });
     return { success: true };
+  }
+
+  @Get('me')
+  @UseGuards(AuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async me(@CurrentUser() user: PublicUser) {
+    return { user };
   }
 }

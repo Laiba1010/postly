@@ -1,0 +1,17 @@
+{
+  "name": "postly",
+  "version": "1.0.0",
+  "description": "",
+  "private": true,
+  "main": "index.js",
+  "scripts": {
+    "dev": "pnpm --parallel --filter ./apps/* dev",
+    "dev:api": "pnpm --filter api start:dev",
+    "dev:web": "pnpm --filter web dev",
+    "lint": "pnpm --filter ./apps/* lint",
+    "format": "pnpm --filter ./apps/* format"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}

@@ -20,7 +20,6 @@ export class AllExceptionsFilter implements ExceptionFilter {
     let statusCode = HttpStatus.INTERNAL_SERVER_ERROR;
     let code = 'INTERNAL_ERROR';
     let message = 'Something went wrong';
-
     if (exception instanceof HttpException) {
       statusCode = exception.getStatus();
       const res = exception.getResponse();
@@ -30,9 +29,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       } else if (typeof res === 'object' && res !== null) {
         const resObj = res as Record<string, unknown>;
         message = (resObj.message as string) ?? message;
+        code = (resObj.code as string) ?? this.mapStatusToCode(statusCode);
+      } else {
+        code = this.mapStatusToCode(statusCode);
       }
-
-      code = this.mapStatusToCode(statusCode);
     } else if (exception instanceof Error) {
       this.logger.error(
         `Unhandled error: ${exception.message}`,

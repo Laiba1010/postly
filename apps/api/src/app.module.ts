@@ -6,6 +6,10 @@ import * as Joi from 'joi';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { RedisModule } from './redis/redis.module';
+import { UsersModule } from './users/users.module';
+import { PasswordModule } from './auth/password/password.module';
+import { SessionsModule } from './sessions/sessions.module';
+import { AuthModule } from './auth/auth.module';
 
 @Module({
   imports: [
@@ -35,6 +39,10 @@ import { RedisModule } from './redis/redis.module';
 
     HealthModule,
     RedisModule,
+    UsersModule,
+    PasswordModule,
+    SessionsModule,
+    AuthModule,
   ],
   controllers: [AppController],
   providers: [AppService],

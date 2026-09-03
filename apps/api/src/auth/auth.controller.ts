@@ -17,6 +17,9 @@ import { LoginDto } from './dto/login.dto';
 import { AuthGuard } from './guards/auth.guard';
 import { CurrentUser } from './decorators/current-user.decorator';
 import type { PublicUser } from './auth.service';
+import { Throttle } from '@nestjs/throttler';
+import { ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
 
 const SESSION_COOKIE_NAME = 'sid';
 
@@ -41,6 +44,7 @@ export class AuthController {
   }
 
   @Post('signup')
+  @Throttle({ default: { limit: 3, ttl: 60000 } }) // 3 signups per minute per IP
   @HttpCode(HttpStatus.CREATED)
   async signup(
     @Body() dto: SignupDto,
@@ -56,6 +60,7 @@ export class AuthController {
   }
 
   @Post('login')
+  @Throttle({ default: { limit: 5, ttl: 60000 } }) // 5 attempts per minute
   @HttpCode(HttpStatus.OK)
   async login(
     @Body() dto: LoginDto,
@@ -85,5 +90,24 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async me(@CurrentUser() user: PublicUser) {
     return { user };
+  }
+  @Post('forgot-password')
+  @Throttle({ default: { limit: 3, ttl: 60000 } })
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    await this.authService.forgotPassword(dto.email);
+    // Always return the same generic response — don't reveal whether the email exists
+    return {
+      message:
+        'If an account exists with this email, a reset link has been sent.',
+    };
+  }
+
+  @Post('reset-password')
+  @Throttle({ default: { limit: 5, ttl: 60000 } })
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    await this.authService.resetPassword(dto.token, dto.newPassword);
+    return { success: true };
   }
 }

@@ -9,6 +9,7 @@ import { useState } from "react";
 import { loginSchema, LoginFormValues } from "@/lib/validations/auth";
 import { login } from "@/lib/api/auth";
 import { ApiError } from "@/lib/api/client";
+import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -74,7 +75,15 @@ export function LoginForm() {
           control={form.control}
           render={({ field, fieldState }) => (
             <Field data-invalid={fieldState.invalid}>
-              <FieldLabel htmlFor="login-password">Password</FieldLabel>
+              <div className="flex items-center justify-between">
+                <FieldLabel htmlFor="login-password">Password</FieldLabel>
+                <Link
+                  href="/forgot-password"
+                  className="text-sm text-muted-foreground underline-offset-4 hover:underline hover:text-foreground"
+                >
+                  Forgot password?
+                </Link>
+              </div>
               <Input
                 {...field}
                 id="login-password"

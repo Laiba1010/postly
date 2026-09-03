@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { SignupForm } from "@/components/auth/signup-form";
 
 export default function SignupPage() {
@@ -8,6 +9,15 @@ export default function SignupPage() {
           Create your account
         </h1>
         <SignupForm />
+        <p className="text-sm text-center text-muted-foreground">
+          Already have an account?{" "}
+          <Link
+            href="/login"
+            className="underline underline-offset-4 text-foreground"
+          >
+            Log in
+          </Link>
+        </p>
       </div>
     </div>
   );

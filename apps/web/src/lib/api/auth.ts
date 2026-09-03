@@ -25,3 +25,16 @@ export function logout() {
 export function getCurrentUser() {
   return apiClient.get<{ user: User }>("/api/auth/me");
 }
+export function forgotPassword(input: { email: string }) {
+  return apiClient.post<{ message: string }>(
+    "/api/auth/forgot-password",
+    input,
+  );
+}
+
+export function resetPassword(input: { token: string; newPassword: string }) {
+  return apiClient.post<{ success: boolean }>(
+    "/api/auth/reset-password",
+    input,
+  );
+}

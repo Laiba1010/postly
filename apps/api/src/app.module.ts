@@ -10,6 +10,10 @@ import { UsersModule } from './users/users.module';
 import { PasswordModule } from './auth/password/password.module';
 import { SessionsModule } from './sessions/sessions.module';
 import { AuthModule } from './auth/auth.module';
+import { WorkspacesModule } from './workspaces/workspaces.module';
+import { MembershipsModule } from './memberships/memberships.module';
+import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { APP_GUARD } from '@nestjs/core';
 
 @Module({
   imports: [
@@ -28,6 +32,12 @@ import { AuthModule } from './auth/auth.module';
         CORS_ORIGIN: Joi.string().required(),
       }),
     }),
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60000, // 1 minute
+        limit: 10, // 10 requests per minute globally as a baseline
+      },
+    ]),
 
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
@@ -43,8 +53,10 @@ import { AuthModule } from './auth/auth.module';
     PasswordModule,
     SessionsModule,
     AuthModule,
+    MembershipsModule,
+    WorkspacesModule,
   ],
   controllers: [AppController],
-  providers: [AppService],
+  providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
 })
 export class AppModule {}

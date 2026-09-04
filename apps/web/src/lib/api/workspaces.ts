@@ -19,3 +19,9 @@ export function getWorkspace(workspaceId: string) {
     `/api/workspaces/${workspaceId}`,
   );
 }
+export function updateWorkspace(workspaceId: string, input: { name: string }) {
+  return apiClient.patch<{ workspace: Workspace }>(
+    `/api/workspaces/${workspaceId}`,
+    input,
+  );
+}

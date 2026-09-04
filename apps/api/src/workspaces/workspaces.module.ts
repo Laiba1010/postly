@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Workspace, WorkspaceSchema } from './schemas/workspace.schema';
 import { MembershipsModule } from '../memberships/memberships.module';
@@ -12,11 +12,11 @@ import { WorkspaceGuard } from './guards/workspace.guard';
     MongooseModule.forFeature([
       { name: Workspace.name, schema: WorkspaceSchema },
     ]),
-    MembershipsModule,
-    AuthModule, // for AuthGuard
+    forwardRef(() => MembershipsModule), // <--- Added forwardRef
+    AuthModule,
   ],
   controllers: [WorkspacesController],
   providers: [WorkspacesService, WorkspaceGuard],
-  exports: [WorkspacesService, WorkspaceGuard], // future modules (Posts, Media, etc.) will reuse this
+  exports: [WorkspacesService, WorkspaceGuard],
 })
 export class WorkspacesModule {}

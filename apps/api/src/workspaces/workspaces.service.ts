@@ -8,6 +8,7 @@ import {
 } from '../memberships/schemas/membership.schema';
 import { Role } from '../common/enums/role.enum';
 import { slugify, randomSuffix } from '../common/utils/slugify';
+import { NotFoundException } from '@nestjs/common';
 
 export interface WorkspaceWithRole {
   id: string;
@@ -141,6 +142,30 @@ export class WorkspacesService {
       name: workspace.name,
       slug: workspace.slug,
       role: membership.role,
+    };
+  }
+  async updateWorkspace(
+    workspaceId: string,
+    updates: { name?: string },
+  ): Promise<WorkspaceWithRole> {
+    const workspace = await this.workspaceModel.findById(workspaceId).exec();
+    if (!workspace) {
+      throw new NotFoundException({
+        code: 'WORKSPACE_NOT_FOUND',
+        message: 'Workspace not found',
+      });
+    }
+
+    if (updates.name !== undefined) {
+      workspace.name = updates.name;
+      await workspace.save();
+    }
+
+    return {
+      id: workspace._id.toString(),
+      name: workspace.name,
+      slug: workspace.slug,
+      role: Role.OWNER, // caller already knows the role from WorkspaceGuard; controller will merge it
     };
   }
 }

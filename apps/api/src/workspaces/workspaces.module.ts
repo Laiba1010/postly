@@ -5,6 +5,7 @@ import { MembershipsModule } from '../memberships/memberships.module';
 import { WorkspacesService } from './workspaces.service';
 import { WorkspacesController } from './workspaces.controller';
 import { AuthModule } from '../auth/auth.module';
+import { WorkspaceGuard } from './guards/workspace.guard';
 
 @Module({
   imports: [
@@ -15,7 +16,7 @@ import { AuthModule } from '../auth/auth.module';
     AuthModule, // for AuthGuard
   ],
   controllers: [WorkspacesController],
-  providers: [WorkspacesService],
-  exports: [WorkspacesService],
+  providers: [WorkspacesService, WorkspaceGuard],
+  exports: [WorkspacesService, WorkspaceGuard], // future modules (Posts, Media, etc.) will reuse this
 })
 export class WorkspacesModule {}

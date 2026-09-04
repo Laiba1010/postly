@@ -17,32 +17,48 @@ export default function DashboardLayout({
   const router = useRouter();
   const pathname = usePathname();
 
+  // Redirect unauthenticated users
   useEffect(() => {
     if (!userLoading && user === null) {
       router.replace("/login");
     }
   }, [userLoading, user, router]);
 
+  // Redirect users with zero workspaces
   useEffect(() => {
     if (workspacesLoading || !workspaces) return;
-
-    const activeStillValid = workspaces.some((w) => w.id === activeWorkspaceId);
-
     if (workspaces.length === 0 && pathname !== "/workspace/new") {
       router.replace("/workspace/new");
-    } else if (workspaces.length > 0 && !activeStillValid) {
+    }
+  }, [workspaces, workspacesLoading, pathname, router]);
+
+  // Self-heal an invalid/stale activeWorkspaceId
+  useEffect(() => {
+    if (workspacesLoading || !workspaces || workspaces.length === 0) return;
+    const activeStillValid = workspaces.some((w) => w.id === activeWorkspaceId);
+    if (!activeStillValid) {
       setActiveWorkspaceId(workspaces[0].id);
     }
-  }, [
-    workspaces,
-    workspacesLoading,
-    activeWorkspaceId,
-    pathname,
-    router,
-    setActiveWorkspaceId,
-  ]);
+  }, [workspaces, workspacesLoading, activeWorkspaceId, setActiveWorkspaceId]);
 
-  if (userLoading || (user && workspacesLoading)) {
+  // Derived (not stored) — computed fresh every render, no setState needed
+  const activeStillValid =
+    !!workspaces &&
+    workspaces.length > 0 &&
+    workspaces.some((w) => w.id === activeWorkspaceId);
+
+  const contextResolved =
+    !workspacesLoading &&
+    !!workspaces &&
+    (workspaces.length === 0 || activeStillValid || workspaces.length > 0);
+
+  const stillCorrecting =
+    !workspacesLoading &&
+    !!workspaces &&
+    workspaces.length > 0 &&
+    !activeStillValid;
+
+  if (userLoading || (user && (workspacesLoading || stillCorrecting))) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         Loading...

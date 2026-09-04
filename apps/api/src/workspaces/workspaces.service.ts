@@ -112,4 +112,35 @@ export class WorkspacesService {
 
     return membership ? membership.role : null;
   }
+  async getWorkspaceContext(
+    userId: string,
+    workspaceId: string,
+  ): Promise<WorkspaceWithRole | null> {
+    if (!Types.ObjectId.isValid(workspaceId)) {
+      return null;
+    }
+
+    const membership = await this.membershipModel
+      .findOne({
+        userId: new Types.ObjectId(userId),
+        workspaceId: new Types.ObjectId(workspaceId),
+      })
+      .exec();
+
+    if (!membership) {
+      return null;
+    }
+
+    const workspace = await this.workspaceModel.findById(workspaceId).exec();
+    if (!workspace) {
+      return null;
+    }
+
+    return {
+      id: workspace._id.toString(),
+      name: workspace.name,
+      slug: workspace.slug,
+      role: membership.role,
+    };
+  }
 }

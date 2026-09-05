@@ -13,6 +13,7 @@ import Link from "next/link";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useSearchParams } from "next/navigation";
 import {
   Field,
   FieldGroup,
@@ -24,6 +25,8 @@ export function LoginForm() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [serverError, setServerError] = useState<string | null>(null);
+  const searchParams = useSearchParams();
+  const redirect = searchParams.get("redirect");
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -34,7 +37,7 @@ export function LoginForm() {
     mutationFn: login,
     onSuccess: ({ user }) => {
       queryClient.setQueryData(["auth", "me"], user);
-      router.push("/dashboard");
+      router.push(redirect || "/dashboard");
     },
     onError: (err) => {
       if (err instanceof ApiError && err.code === "INVALID_CREDENTIALS") {

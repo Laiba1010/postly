@@ -17,6 +17,6 @@ import { WorkspaceGuard } from './guards/workspace.guard';
   ],
   controllers: [WorkspacesController],
   providers: [WorkspacesService, WorkspaceGuard],
-  exports: [WorkspacesService, WorkspaceGuard],
+  exports: [WorkspacesService, WorkspaceGuard, MongooseModule],
 })
 export class WorkspacesModule {}

@@ -14,6 +14,7 @@ import { WorkspacesModule } from './workspaces/workspaces.module';
 import { MembershipsModule } from './memberships/memberships.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
+import { InvitationsModule } from './invitations/invitations.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { APP_GUARD } from '@nestjs/core';
     AuthModule,
     MembershipsModule,
     WorkspacesModule,
+    InvitationsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

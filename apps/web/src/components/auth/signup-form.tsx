@@ -18,12 +18,14 @@ import {
   FieldLabel,
   FieldError,
 } from "@/components/ui/field";
+import { useSearchParams } from "next/navigation";
 
 export function SignupForm() {
   const router = useRouter();
   const queryClient = useQueryClient();
   const [serverError, setServerError] = useState<string | null>(null);
-
+  const searchParams = useSearchParams();
+  const redirect = searchParams.get("redirect");
   const form = useForm<SignupFormValues>({
     resolver: zodResolver(signupSchema),
     defaultValues: { name: "", email: "", password: "", confirmPassword: "" },
@@ -33,7 +35,7 @@ export function SignupForm() {
     mutationFn: signup,
     onSuccess: ({ user }) => {
       queryClient.setQueryData(["auth", "me"], user);
-      router.push("/dashboard");
+      router.push(redirect || "/dashboard");
     },
     onError: (err) => {
       if (err instanceof ApiError && err.code === "EMAIL_ALREADY_EXISTS") {

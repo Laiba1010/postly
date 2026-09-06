@@ -5,6 +5,7 @@ import { useWorkspaces } from "@/lib/hooks/use-workspaces";
 import { useWorkspaceStore } from "@/lib/stores/workspace-store";
 import { useRouter, usePathname } from "next/navigation";
 import { useEffect } from "react";
+import { AppShell } from "@/components/shell/app-shell";
 
 export default function DashboardLayout({
   children,
@@ -16,6 +17,7 @@ export default function DashboardLayout({
   const { activeWorkspaceId, setActiveWorkspaceId } = useWorkspaceStore();
   const router = useRouter();
   const pathname = usePathname();
+  const hasHydrated = useWorkspaceStore((s) => s.hasHydrated);
 
   // Redirect unauthenticated users
   useEffect(() => {
@@ -58,7 +60,11 @@ export default function DashboardLayout({
     workspaces.length > 0 &&
     !activeStillValid;
 
-  if (userLoading || (user && (workspacesLoading || stillCorrecting))) {
+  if (
+    userLoading ||
+    !hasHydrated ||
+    (user && (workspacesLoading || stillCorrecting))
+  ) {
     return (
       <div className="flex min-h-screen items-center justify-center">
         Loading...
@@ -68,5 +74,9 @@ export default function DashboardLayout({
 
   if (!user) return null;
 
-  return <>{children}</>;
+  if (workspaces && workspaces.length === 0) {
+    return <>{children}</>;
+  }
+
+  return <AppShell>{children}</AppShell>;
 }

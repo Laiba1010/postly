@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { InviteMemberDialog } from "@/components/workspace/invite-member-dialog";
 import { PendingInvitations } from "@/components/workspace/pending-invitations";
 import { RoleControl } from "@/components/workspace/role-control";
+import { initials } from "@/lib/format";
 
 import {
   Table,
@@ -38,19 +39,6 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 
 import { cn } from "@/lib/utils";
-
-/* -------------------------------------------------------------------------- */
-/* Helpers                                                                    */
-/* -------------------------------------------------------------------------- */
-
-function initials(name: string) {
-  return name
-    .split(" ")
-    .map((part) => part[0])
-    .join("")
-    .slice(0, 2)
-    .toUpperCase();
-}
 
 /**
  * Uses the existing shadcn chart tokens from your theme.

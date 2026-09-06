@@ -1,7 +1,6 @@
 "use client";
 
 import { Controller } from "react-hook-form";
-import { useRouter } from "next/navigation";
 import { useCreateWorkspaceForm } from "@/lib/hooks/use-create-workspace-form";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -11,19 +10,35 @@ import {
   FieldLabel,
   FieldError,
 } from "@/components/ui/field";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 
-export default function NewWorkspacePage() {
-  const router = useRouter();
-  const { form, mutation } = useCreateWorkspaceForm(() =>
-    router.push("/dashboard"),
-  );
+interface CreateWorkspaceDialogProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+}
+
+export function CreateWorkspaceDialog({
+  open,
+  onOpenChange,
+}: CreateWorkspaceDialogProps) {
+  const { form, mutation } = useCreateWorkspaceForm(() => onOpenChange(false));
 
   return (
-    <div className="flex min-h-screen items-center justify-center">
-      <div className="w-full max-w-sm space-y-6">
-        <h1 className="text-2xl font-semibold text-center">
-          Create your workspace
-        </h1>
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Create workspace</DialogTitle>
+          <DialogDescription>
+            Give your workspace a name. You can invite teammates afterward.
+          </DialogDescription>
+        </DialogHeader>
         <form onSubmit={form.handleSubmit((values) => mutation.mutate(values))}>
           <FieldGroup>
             <Controller
@@ -31,14 +46,15 @@ export default function NewWorkspacePage() {
               control={form.control}
               render={({ field, fieldState }) => (
                 <Field data-invalid={fieldState.invalid}>
-                  <FieldLabel htmlFor="workspace-name">
+                  <FieldLabel htmlFor="new-workspace-name">
                     Workspace name
                   </FieldLabel>
                   <Input
                     {...field}
-                    id="workspace-name"
+                    id="new-workspace-name"
                     placeholder="Acme Marketing"
                     aria-invalid={fieldState.invalid}
+                    autoFocus
                   />
                   {fieldState.invalid && (
                     <FieldError errors={[fieldState.error]} />
@@ -46,16 +62,21 @@ export default function NewWorkspacePage() {
                 </Field>
               )}
             />
+          </FieldGroup>
+          <DialogFooter className="mt-4">
             <Button
-              type="submit"
-              className="w-full"
-              disabled={mutation.isPending}
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
             >
+              Cancel
+            </Button>
+            <Button type="submit" disabled={mutation.isPending}>
               {mutation.isPending ? "Creating..." : "Create workspace"}
             </Button>
-          </FieldGroup>
+          </DialogFooter>
         </form>
-      </div>
-    </div>
+      </DialogContent>
+    </Dialog>
   );
 }

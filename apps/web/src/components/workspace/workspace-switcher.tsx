@@ -12,11 +12,13 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { useState } from "react";
+import { CreateWorkspaceDialog } from "./create-workspace-dialog";
 
 export function WorkspaceSwitcher() {
-  const router = useRouter();
   const { data: workspaces } = useWorkspaces();
   const { activeWorkspaceId, setActiveWorkspaceId } = useWorkspaceStore();
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
 
   const active = workspaces?.find((w) => w.id === activeWorkspaceId);
 
@@ -25,36 +27,42 @@ export function WorkspaceSwitcher() {
   }
 
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger
-        render={
-          <Button variant="outline" className="w-[220px] justify-between">
-            <span className="truncate">
-              {active?.name ?? "Select workspace"}
-            </span>
-            <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
-          </Button>
-        }
-      />
-      <DropdownMenuContent className="w-[220px]">
-        {workspaces.map((workspace) => (
-          <DropdownMenuItem
-            key={workspace.id}
-            onClick={() => setActiveWorkspaceId(workspace.id)}
-            className="justify-between"
-          >
-            <span className="truncate">{workspace.name}</span>
-            {workspace.id === activeWorkspaceId && (
-              <Check className="h-4 w-4" />
-            )}
+    <>
+      <DropdownMenu modal={false}>
+        <DropdownMenuTrigger
+          render={
+            <Button variant="outline" className="w-full justify-between">
+              <span className="truncate">
+                {active?.name ?? "Select workspace"}
+              </span>
+              <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+            </Button>
+          }
+        />
+        <DropdownMenuContent className="w-[220px]">
+          {workspaces.map((workspace) => (
+            <DropdownMenuItem
+              key={workspace.id}
+              onClick={() => setActiveWorkspaceId(workspace.id)}
+              className="justify-between"
+            >
+              <span className="truncate">{workspace.name}</span>
+              {workspace.id === activeWorkspaceId && (
+                <Check className="h-4 w-4" />
+              )}
+            </DropdownMenuItem>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem onClick={() => setCreateDialogOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" />
+            Create workspace
           </DropdownMenuItem>
-        ))}
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => router.push("/workspace/new")}>
-          <Plus className="mr-2 h-4 w-4" />
-          Create workspace
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <CreateWorkspaceDialog
+        open={createDialogOpen}
+        onOpenChange={setCreateDialogOpen}
+      />
+    </>
   );
 }

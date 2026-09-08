@@ -15,6 +15,9 @@ import { MembershipsModule } from './memberships/memberships.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { InvitationsModule } from './invitations/invitations.module';
+import { SocialConnectionsModule } from './social-connections/social-connections.module';
+
+// add to imports array
 
 @Module({
   imports: [
@@ -57,6 +60,7 @@ import { InvitationsModule } from './invitations/invitations.module';
     MembershipsModule,
     WorkspacesModule,
     InvitationsModule,
+    SocialConnectionsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

@@ -6,7 +6,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import { z } from "zod";
 
-import { createWorkspace } from "@/lib/api/workspaces";
+import { createWorkspace, type Workspace } from "@/lib/api/workspaces";
 import { useWorkspaceStore } from "@/lib/stores/workspace-store";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,19 +26,42 @@ type FormValues = z.infer<typeof schema>;
 export function CreateWorkspaceForm() {
   const router = useRouter();
   const queryClient = useQueryClient();
+
   const setActiveWorkspaceId = useWorkspaceStore((s) => s.setActiveWorkspaceId);
 
   const form = useForm<FormValues>({
     resolver: zodResolver(schema),
-    defaultValues: { name: "" },
+    defaultValues: {
+      name: "",
+    },
   });
 
   const mutation = useMutation({
     mutationFn: createWorkspace,
+
     onSuccess: ({ workspace }) => {
-      queryClient.invalidateQueries({ queryKey: ["workspaces"] });
+      // Immediately update the cached workspace list.
+      queryClient.setQueryData<Workspace[]>(
+        ["workspaces"],
+        (currentWorkspaces) => {
+          if (!currentWorkspaces) {
+            return [workspace];
+          }
+
+          return [...currentWorkspaces, workspace];
+        },
+      );
+
+      // Automatically select the newly created workspace.
       setActiveWorkspaceId(workspace.id);
+
+      // Navigate to the dashboard.
       router.push("/dashboard");
+
+      // Confirm the cache against the backend in the background.
+      queryClient.invalidateQueries({
+        queryKey: ["workspaces"],
+      });
     },
   });
 
@@ -55,16 +78,19 @@ export function CreateWorkspaceForm() {
           render={({ field, fieldState }) => (
             <Field data-invalid={fieldState.invalid}>
               <FieldLabel htmlFor="workspace-name">Workspace name</FieldLabel>
+
               <Input
                 {...field}
                 id="workspace-name"
                 placeholder="Acme Marketing"
                 aria-invalid={fieldState.invalid}
               />
+
               {fieldState.invalid && <FieldError errors={[fieldState.error]} />}
             </Field>
           )}
         />
+
         <Button type="submit" className="w-full" disabled={mutation.isPending}>
           {mutation.isPending ? "Creating..." : "Create workspace"}
         </Button>

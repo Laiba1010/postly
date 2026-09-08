@@ -69,4 +69,7 @@ export class SessionsService {
     const hashedToken = this.hashToken(rawToken);
     await this.redisClient.del(this.key(hashedToken));
   }
+  getFingerprint(rawToken: string): string {
+    return this.hashToken(rawToken);
+  }
 }

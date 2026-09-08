@@ -44,12 +44,13 @@ export class AuthGuard implements CanActivate {
       });
     }
 
-    // Attach to request so controllers/handlers can access it
     (request as any).user = {
       id: user.id.toString(),
       name: user.name,
       email: user.email,
     };
+    (request as any).sessionFingerprint =
+      this.sessionsService.getFingerprint(sessionId);
 
     return true;
   }

@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Delete,
+  Controller,
+  Get,
+  Param,
+  Post,
+  UseGuards,
+} from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { WorkspaceGuard } from '../workspaces/guards/workspace.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -49,6 +57,16 @@ export class InvitationsController {
   @UseGuards(AuthGuard)
   async accept(@Param('token') token: string, @CurrentUser() user: PublicUser) {
     await this.invitationsService.acceptInvitation(token, user.id, user.email);
+    return { success: true };
+  }
+  @Delete('workspaces/:workspaceId/invitations/:invitationId')
+  @UseGuards(AuthGuard, WorkspaceGuard, RolesGuard)
+  @Roles(Role.OWNER)
+  async revoke(
+    @Param('workspaceId') workspaceId: string,
+    @Param('invitationId') invitationId: string,
+  ) {
+    await this.invitationsService.revokeInvitation(workspaceId, invitationId);
     return { success: true };
   }
 }

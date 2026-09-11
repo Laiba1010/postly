@@ -15,6 +15,9 @@ import { MembershipsModule } from './memberships/memberships.module';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { InvitationsModule } from './invitations/invitations.module';
+import { ScheduleModule } from '@nestjs/schedule';
+import { PostsModule } from './posts/posts.module';
+import { MediaModule } from './media/media.module';
 import { SocialConnectionsModule } from './social-connections/social-connections.module';
 
 // add to imports array
@@ -61,6 +64,9 @@ import { SocialConnectionsModule } from './social-connections/social-connections
     WorkspacesModule,
     InvitationsModule,
     SocialConnectionsModule,
+    ScheduleModule.forRoot(),
+    PostsModule,
+    MediaModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

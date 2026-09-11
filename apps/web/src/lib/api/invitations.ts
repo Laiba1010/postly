@@ -37,3 +37,8 @@ export function acceptInvitation(token: string) {
     `/api/invitations/${token}/accept`,
   );
 }
+export function revokeInvitation(workspaceId: string, invitationId: string) {
+  return apiClient.delete<{ success: boolean }>(
+    `/api/workspaces/${workspaceId}/invitations/${invitationId}`,
+  );
+}

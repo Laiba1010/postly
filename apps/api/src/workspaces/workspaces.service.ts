@@ -9,6 +9,14 @@ import {
 import { Role } from '../common/enums/role.enum';
 import { slugify, randomSuffix } from '../common/utils/slugify';
 import { NotFoundException } from '@nestjs/common';
+import {
+  SocialConnection,
+  SocialConnectionDocument,
+} from '../social-connections/schemas/social-connection.schema';
+import {
+  Invitation,
+  InvitationDocument,
+} from '../invitations/schemas/invitation.schema';
 
 export interface WorkspaceWithRole {
   id: string;
@@ -25,8 +33,11 @@ export class WorkspacesService {
     private readonly workspaceModel: Model<WorkspaceDocument>,
     @InjectModel(Membership.name)
     private readonly membershipModel: Model<MembershipDocument>,
+    @InjectModel(SocialConnection.name)
+    private readonly socialConnectionModel: Model<SocialConnectionDocument>,
+    @InjectModel(Invitation.name)
+    private readonly invitationModel: Model<InvitationDocument>,
   ) {}
-
   private async generateUniqueSlug(name: string): Promise<string> {
     const base = slugify(name) || 'workspace';
     let candidate = base;
@@ -167,5 +178,48 @@ export class WorkspacesService {
       slug: workspace.slug,
       role: Role.OWNER, // caller already knows the role from WorkspaceGuard; controller will merge it
     };
+  }
+  async deleteWorkspace(workspaceId: string): Promise<void> {
+    const session = await this.connection.startSession();
+
+    try {
+      await session.withTransaction(async () => {
+        const workspace = await this.workspaceModel
+          .findById(workspaceId)
+          .session(session)
+          .exec();
+
+        if (!workspace) {
+          throw new NotFoundException({
+            code: 'WORKSPACE_NOT_FOUND',
+            message: 'Workspace not found',
+          });
+        }
+
+        // Cascade across every domain that currently references a workspace.
+        // If a future phase (Posts, Media, PostTargets, ...) introduces a new
+        // workspace-scoped collection, it must be added here too — this is
+        // the single place workspace cascade-delete is owned.
+        await this.membershipModel.deleteMany(
+          { workspaceId: workspace._id },
+          { session },
+        );
+        await this.socialConnectionModel.deleteMany(
+          { workspaceId: workspace._id },
+          { session },
+        );
+        await this.invitationModel.deleteMany(
+          { workspaceId: workspace._id },
+          { session },
+        );
+
+        await this.workspaceModel.deleteOne(
+          { _id: workspace._id },
+          { session },
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
   }
 }

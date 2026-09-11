@@ -14,3 +14,5 @@ dist
 .next
 .turbo
 coverage
+
+apps/api/storage/

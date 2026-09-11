@@ -6,6 +6,7 @@ import {
   Post,
   UseGuards,
   Param,
+  Delete,
 } from '@nestjs/common';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
@@ -60,5 +61,12 @@ export class WorkspacesController {
       dto,
     );
     return { workspace: { ...updated, role: workspace.role } };
+  }
+  @Delete(':workspaceId')
+  @UseGuards(WorkspaceGuard, RolesGuard)
+  @Roles(Role.OWNER)
+  async remove(@Param('workspaceId') workspaceId: string) {
+    await this.workspacesService.deleteWorkspace(workspaceId);
+    return { success: true };
   }
 }

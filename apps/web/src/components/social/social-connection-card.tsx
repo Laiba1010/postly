@@ -45,11 +45,20 @@ export function SocialConnectionCard({
             <p className="truncate text-sm text-muted-foreground">
               {connection.accountName}
             </p>
+            {connection.isExpired && (
+              <p className="mt-0.5 text-xs text-destructive">
+                Reconnect this account to keep publishing to it.
+              </p>
+            )}
           </div>
         </div>
 
         <div className="flex shrink-0 items-center gap-3">
-          <Badge variant="secondary">Connected</Badge>
+          {connection.isExpired ? (
+            <Badge variant="destructive">Expired</Badge>
+          ) : (
+            <Badge variant="secondary">Connected</Badge>
+          )}
           {canManage && (
             <AlertDialog>
               <AlertDialogTrigger

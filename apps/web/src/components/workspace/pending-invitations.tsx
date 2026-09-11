@@ -1,7 +1,10 @@
 "use client";
 
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { usePendingInvitations } from "@/lib/hooks/use-invitations";
+import { revokeInvitation } from "@/lib/api/invitations";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Clock } from "lucide-react";
 
 function daysUntil(dateStr: string): string {
@@ -12,6 +15,15 @@ function daysUntil(dateStr: string): string {
 
 export function PendingInvitations({ workspaceId }: { workspaceId: string }) {
   const { data: invitations, isLoading } = usePendingInvitations(workspaceId);
+  const queryClient = useQueryClient();
+
+  const revokeMutation = useMutation({
+    mutationFn: (invitationId: string) =>
+      revokeInvitation(workspaceId, invitationId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invitations", workspaceId] });
+    },
+  });
 
   if (isLoading || !invitations || invitations.length === 0) {
     return null;
@@ -35,7 +47,18 @@ export function PendingInvitations({ workspaceId }: { workspaceId: string }) {
                 Expires in {daysUntil(inv.expiresAt)}
               </p>
             </div>
-            <Badge variant="secondary">{inv.role}</Badge>
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">{inv.role}</Badge>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-destructive"
+                disabled={revokeMutation.isPending}
+                onClick={() => revokeMutation.mutate(inv.id)}
+              >
+                Revoke
+              </Button>
+            </div>
           </div>
         ))}
       </div>

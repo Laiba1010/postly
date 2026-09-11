@@ -20,6 +20,8 @@ export interface SocialConnectionSummary {
   accountId: string;
   accountName: string;
   status: ConnectionStatus;
+  isExpired: boolean;
+  expiresAt: Date;
   createdAt: Date;
 }
 
@@ -100,7 +102,6 @@ export class SocialConnectionsService {
       });
     }
   }
-
   private toSummary(c: SocialConnectionDocument): SocialConnectionSummary {
     return {
       id: c._id.toString(),
@@ -108,6 +109,8 @@ export class SocialConnectionsService {
       accountId: c.accountId,
       accountName: c.accountName,
       status: c.status,
+      isExpired: c.expiresAt < new Date(),
+      expiresAt: c.expiresAt,
       createdAt: c.createdAt,
     };
   }

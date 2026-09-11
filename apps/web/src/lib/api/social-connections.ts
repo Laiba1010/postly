@@ -1,7 +1,7 @@
-import { apiClient } from './client';
+import { apiClient } from "./client";
 
-export type SocialProvider = 'INSTAGRAM' | 'FACEBOOK' | 'LINKEDIN' | 'X';
-export type ConnectionStatus = 'ACTIVE';
+export type SocialProvider = "INSTAGRAM" | "FACEBOOK" | "LINKEDIN" | "X";
+export type ConnectionStatus = "ACTIVE";
 
 export interface SocialConnection {
   id: string;
@@ -9,6 +9,8 @@ export interface SocialConnection {
   accountId: string;
   accountName: string;
   status: ConnectionStatus;
+  isExpired: boolean;
+  expiresAt: string;
   createdAt: string;
 }
 
@@ -30,7 +32,10 @@ export function listSocialConnections(workspaceId: string) {
   );
 }
 
-export function disconnectSocialConnection(workspaceId: string, connectionId: string) {
+export function disconnectSocialConnection(
+  workspaceId: string,
+  connectionId: string,
+) {
   return apiClient.delete<{ success: boolean }>(
     `/api/workspaces/${workspaceId}/social-connections/${connectionId}`,
   );
@@ -42,7 +47,11 @@ export function startOAuth(workspaceId: string, provider: SocialProvider) {
   );
 }
 
-export function completeOAuth(input: { state: string; accountId?: string; cancelled?: boolean }) {
+export function completeOAuth(input: {
+  state: string;
+  accountId?: string;
+  cancelled?: boolean;
+}) {
   return apiClient.post<{ cancelled: boolean; connection?: SocialConnection }>(
     `/api/oauth/callback`,
     input,

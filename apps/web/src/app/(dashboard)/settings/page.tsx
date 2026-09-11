@@ -5,6 +5,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { z } from "zod";
+import { useState } from "react";
+import { DeleteWorkspaceDialog } from "@/components/workspace/delete-workspace-dialog";
 
 import { updateWorkspace } from "@/lib/api/workspaces";
 import { useWorkspaceContext } from "@/lib/hooks/use-workspace-context";
@@ -34,6 +36,7 @@ const schema = z.object({
 type FormValues = z.infer<typeof schema>;
 
 export default function SettingsPage() {
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const activeWorkspaceId = useWorkspaceStore((s) => s.activeWorkspaceId);
   const { data: workspace, isLoading } = useWorkspaceContext(activeWorkspaceId);
   const queryClient = useQueryClient();
@@ -127,6 +130,33 @@ export default function SettingsPage() {
           )}
         </form>
       </Card>
+      {isOwner && workspace && (
+        <Card className="border-destructive/30 mt-6">
+          <CardHeader>
+            <CardTitle className="text-destructive">Danger zone</CardTitle>
+            <CardDescription>
+              Permanently delete this workspace and all of its data.
+            </CardDescription>
+          </CardHeader>
+          <CardFooter>
+            <Button
+              variant="destructive"
+              onClick={() => setDeleteDialogOpen(true)}
+            >
+              Delete workspace
+            </Button>
+          </CardFooter>
+        </Card>
+      )}
+
+      {workspace && (
+        <DeleteWorkspaceDialog
+          workspaceId={activeWorkspaceId!}
+          workspaceName={workspace.name}
+          open={deleteDialogOpen}
+          onOpenChange={setDeleteDialogOpen}
+        />
+      )}
     </div>
   );
 }

@@ -25,3 +25,8 @@ export function updateWorkspace(workspaceId: string, input: { name: string }) {
     input,
   );
 }
+export function deleteWorkspace(workspaceId: string) {
+  return apiClient.delete<{ success: boolean }>(
+    `/api/workspaces/${workspaceId}`,
+  );
+}

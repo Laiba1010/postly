@@ -1,10 +1,18 @@
-import { BadRequestException, ForbiddenException, Inject, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Inject,
+  Injectable,
+} from '@nestjs/common';
 import { randomUUID } from 'crypto';
 import Redis from 'ioredis';
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { SocialProvider } from './enums/provider.enum';
 import { ProviderRegistry } from './providers/provider.registry';
-import { SocialConnectionsService, SocialConnectionSummary } from './social-connections.service';
+import {
+  SocialConnectionsService,
+  SocialConnectionSummary,
+} from './social-connections.service';
 import { WorkspacesService } from '../workspaces/workspaces.service';
 import { Role } from '../common/enums/role.enum';
 import type { PublicUser } from '../auth/auth.service';
@@ -54,8 +62,18 @@ export class OAuthService {
     const adapter = this.providerRegistry.get(provider);
 
     const state = randomUUID();
-    const data: OAuthStateData = { userId, workspaceId, provider, sessionFingerprint };
-    await this.redisClient.set(this.key(state), JSON.stringify(data), 'EX', STATE_TTL_SECONDS);
+    const data: OAuthStateData = {
+      userId,
+      workspaceId,
+      provider,
+      sessionFingerprint,
+    };
+    await this.redisClient.set(
+      this.key(state),
+      JSON.stringify(data),
+      'EX',
+      STATE_TTL_SECONDS,
+    );
 
     return {
       state,
@@ -91,7 +109,8 @@ export class OAuthService {
     if (stateData.sessionFingerprint !== currentSessionFingerprint) {
       throw new ForbiddenException({
         code: 'OAUTH_SESSION_MISMATCH',
-        message: 'This authorization request belongs to a different session. Please restart the connection.',
+        message:
+          'This authorization request belongs to a different session. Please restart the connection.',
       });
     }
 
@@ -108,12 +127,15 @@ export class OAuthService {
     if (!role || !ALLOWED_ROLES.includes(role)) {
       throw new ForbiddenException({
         code: 'INSUFFICIENT_ROLE',
-        message: 'You do not have permission to connect social accounts in this workspace',
+        message:
+          'You do not have permission to connect social accounts in this workspace',
       });
     }
 
     const adapter = this.providerRegistry.get(stateData.provider);
-    const mockAccount = adapter.getMockAccounts().find((a) => a.accountId === dto.accountId);
+    const mockAccount = adapter
+      .getMockAccounts()
+      .find((a) => a.accountId === dto.accountId);
 
     if (!mockAccount) {
       throw new BadRequestException({

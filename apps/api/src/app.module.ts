@@ -19,6 +19,7 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { PostsModule } from './posts/posts.module';
 import { MediaModule } from './media/media.module';
 import { SocialConnectionsModule } from './social-connections/social-connections.module';
+import { QueueModule } from './queue/queue.module';
 
 // add to imports array
 
@@ -67,6 +68,7 @@ import { SocialConnectionsModule } from './social-connections/social-connections
     ScheduleModule.forRoot(),
     PostsModule,
     MediaModule,
+    QueueModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],

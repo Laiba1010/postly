@@ -11,6 +11,7 @@ import { PostsService } from './posts.service';
 import { PostsController } from './posts.controller';
 import { AuthModule } from '../auth/auth.module';
 import { WorkspacesModule } from '../workspaces/workspaces.module';
+import { QueueModule } from '../queue/queue.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { WorkspacesModule } from '../workspaces/workspaces.module';
     ]),
     AuthModule,
     WorkspacesModule,
+    QueueModule,
   ],
   controllers: [PostsController],
   providers: [PostsService],

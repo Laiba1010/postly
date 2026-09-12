@@ -6,22 +6,31 @@ import {
 } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Connection, Model, Types } from 'mongoose';
+
+import { QueueService } from '../queue/queue.service';
+
 import { Post, PostDocument } from './schemas/post.schema';
 import { PostTarget, PostTargetDocument } from './schemas/post-target.schema';
+
 import { PostStatus } from './enums/post-status.enum';
 import { PostTargetStatus } from './enums/post-target-status.enum';
+
 import { SaveDraftDto } from './dto/save-draft.dto';
 import { SchedulePostDto } from './dto/schedule-post.dto';
 import { ReschedulePostDto } from './dto/reschedule-post.dto';
+
 import { validateAgainstPlatformRules } from './constants/platform-rules';
+
 import {
   calculateScheduledUtc,
   assertScheduledInFuture,
 } from './utils/timezone.util';
+
 import {
   SocialConnection,
   SocialConnectionDocument,
 } from '../social-connections/schemas/social-connection.schema';
+
 import { Media, MediaDocument } from '../media/schemas/media.schema';
 import { MEDIA_LIMITS } from '../media/constants/media-limits';
 
@@ -53,12 +62,15 @@ export interface PostSummary {
 export class PostsService {
   constructor(
     @InjectConnection() private readonly connection: Connection,
-    @InjectModel(Post.name) private readonly postModel: Model<PostDocument>,
+    @InjectModel(Post.name)
+    private readonly postModel: Model<PostDocument>,
     @InjectModel(PostTarget.name)
     private readonly postTargetModel: Model<PostTargetDocument>,
     @InjectModel(SocialConnection.name)
     private readonly socialConnectionModel: Model<SocialConnectionDocument>,
-    @InjectModel(Media.name) private readonly mediaModel: Model<MediaDocument>,
+    @InjectModel(Media.name)
+    private readonly mediaModel: Model<MediaDocument>,
+    private readonly queueService: QueueService,
   ) {}
 
   private toObjectId(value: string, fieldName: string): Types.ObjectId {
@@ -74,13 +86,19 @@ export class PostsService {
 
   private async resolveAndValidateDestinations(
     workspaceId: string,
-    destinationInputs: { provider: string; socialConnectionId: string }[],
+    destinationInputs: {
+      provider: string;
+      socialConnectionId: string;
+    }[],
   ) {
-    if (!destinationInputs || destinationInputs.length === 0) return [];
+    if (!destinationInputs || destinationInputs.length === 0) {
+      return [];
+    }
 
     const invalidId = destinationInputs.some(
       (d) => !Types.ObjectId.isValid(d.socialConnectionId),
     );
+
     if (invalidId) {
       throw new BadRequestException({
         code: 'INVALID_DESTINATION',
@@ -91,6 +109,7 @@ export class PostsService {
     const connectionIds = destinationInputs.map(
       (d) => new Types.ObjectId(d.socialConnectionId),
     );
+
     const connections = await this.socialConnectionModel.find({
       _id: { $in: connectionIds },
       workspaceId: new Types.ObjectId(workspaceId),
@@ -116,7 +135,9 @@ export class PostsService {
     mediaIds: string[],
     currentPostId: string | null,
   ) {
-    if (!mediaIds || mediaIds.length === 0) return [];
+    if (!mediaIds || mediaIds.length === 0) {
+      return [];
+    }
 
     if (mediaIds.length > MEDIA_LIMITS.MAX_MEDIA_PER_POST) {
       throw new BadRequestException({
@@ -126,6 +147,7 @@ export class PostsService {
     }
 
     const invalidId = mediaIds.some((id) => !Types.ObjectId.isValid(id));
+
     if (invalidId) {
       throw new BadRequestException({
         code: 'INVALID_MEDIA',
@@ -134,6 +156,7 @@ export class PostsService {
     }
 
     const objectIds = mediaIds.map((id) => new Types.ObjectId(id));
+
     const media = await this.mediaModel.find({
       _id: { $in: objectIds },
       workspaceId: new Types.ObjectId(workspaceId),
@@ -151,6 +174,7 @@ export class PostsService {
       (m) =>
         m.postId && (!currentPostId || m.postId.toString() !== currentPostId),
     );
+
     if (conflicting) {
       throw new BadRequestException({
         code: 'MEDIA_ALREADY_ATTACHED',
@@ -171,6 +195,7 @@ export class PostsService {
       workspaceId,
       dto.destinations ?? [],
     );
+
     const mediaIds = await this.resolveAndValidateMedia(
       workspaceId,
       dto.mediaIds ?? [],
@@ -182,6 +207,7 @@ export class PostsService {
       destinations,
       mediaIds.length,
     );
+
     if (platformErrors.length > 0) {
       throw new BadRequestException({
         code: 'PLATFORM_VALIDATION_FAILED',
@@ -361,6 +387,7 @@ export class PostsService {
       destinations,
       mediaIds.length,
     );
+
     if (platformErrors.length > 0) {
       throw new BadRequestException({
         code: 'PLATFORM_VALIDATION_FAILED',
@@ -373,21 +400,33 @@ export class PostsService {
     post.content = content;
     post.destinations = destinations as any;
     post.mediaIds = mediaIds as any;
+
     await post.save();
 
     const newMediaIds = (mediaIds || []).map((id) => id.toString());
+
     const added = newMediaIds.filter((id) => !previousMediaIds.includes(id));
+
     const removed = previousMediaIds.filter((id) => !newMediaIds.includes(id));
 
     if (added.length > 0) {
       await this.mediaModel.updateMany(
-        { _id: { $in: added.map((id) => new Types.ObjectId(id)) } },
+        {
+          _id: {
+            $in: added.map((id) => new Types.ObjectId(id)),
+          },
+        },
         { postId: post._id },
       );
     }
+
     if (removed.length > 0) {
       await this.mediaModel.updateMany(
-        { _id: { $in: removed.map((id) => new Types.ObjectId(id)) } },
+        {
+          _id: {
+            $in: removed.map((id) => new Types.ObjectId(id)),
+          },
+        },
         { postId: null },
       );
     }
@@ -401,6 +440,7 @@ export class PostsService {
     dto: SchedulePostDto,
   ): Promise<PostSummary> {
     const workspaceObjectId = this.toObjectId(workspaceId, 'workspaceId');
+
     const postObjectId = this.toObjectId(postId, 'postId');
 
     const scheduledUtc = calculateScheduledUtc(
@@ -444,6 +484,8 @@ export class PostsService {
         errors: platformErrors,
       });
     }
+
+    let insertedTargets: PostTargetDocument[] = [];
 
     const session = await this.connection.startSession();
 
@@ -493,10 +535,46 @@ export class PostsService {
           scheduledAt: scheduledUtc,
         }));
 
-        await this.postTargetModel.insertMany(targetDocs, {
+        insertedTargets = await this.postTargetModel.insertMany(targetDocs, {
           session,
         });
       });
+
+      /**
+       * Queue sync happens after the DB transaction commits.
+       *
+       * MongoDB and Redis cannot participate in the same transaction here,
+       * so a queue failure must be explicitly detected rather than silently
+       * reported as a successful enqueue.
+       *
+       * ReconciliationService is responsible for repairing any queue drift.
+       */
+      await Promise.all(
+        insertedTargets.map(async (target) => {
+          const queueSynced = await this.queueService.scheduleJob(
+            {
+              postTargetId: target._id.toString(),
+              workspaceId,
+              postId: scheduledPost!._id.toString(),
+              platform: target.platform,
+            },
+            scheduledUtc,
+          );
+
+          if (!queueSynced) {
+            // The DB transaction has already committed, so we cannot roll it
+            // back here. Make the failure explicit in application logs so it
+            // can be detected and repaired by reconciliation.
+            //
+            // Do not throw here: throwing would make the HTTP request look
+            // like a failed schedule even though the post is already
+            // SCHEDULED in MongoDB.
+            console.error(
+              `Queue synchronization failed for scheduled post target ${target._id.toString()}`,
+            );
+          }
+        }),
+      );
 
       return this.toSummary(scheduledPost!);
     } finally {
@@ -510,6 +588,7 @@ export class PostsService {
     dto: ReschedulePostDto,
   ): Promise<PostSummary> {
     const workspaceObjectId = this.toObjectId(workspaceId, 'workspaceId');
+
     const postObjectId = this.toObjectId(postId, 'postId');
 
     const scheduledUtc = calculateScheduledUtc(
@@ -564,11 +643,37 @@ export class PostsService {
           },
         );
       });
-
-      return this.toSummary(post);
     } finally {
       await session.endSession();
     }
+
+    const affectedTargets = await this.postTargetModel.find({
+      postId: post._id,
+      workspaceId: workspaceObjectId,
+      status: PostTargetStatus.SCHEDULED,
+    });
+
+    await Promise.all(
+      affectedTargets.map(async (target) => {
+        const queueSynced = await this.queueService.rescheduleJob(
+          {
+            postTargetId: target._id.toString(),
+            workspaceId,
+            postId: post._id.toString(),
+            platform: target.platform,
+          },
+          scheduledUtc,
+        );
+
+        if (!queueSynced) {
+          console.error(
+            `Queue synchronization failed while rescheduling post target ${target._id.toString()}`,
+          );
+        }
+      }),
+    );
+
+    return this.toSummary(post);
   }
 
   async cancelSchedule(
@@ -576,6 +681,7 @@ export class PostsService {
     postId: string,
   ): Promise<PostSummary> {
     const workspaceObjectId = this.toObjectId(workspaceId, 'workspaceId');
+
     const postObjectId = this.toObjectId(postId, 'postId');
 
     const post = await this.postModel.findOne({
@@ -596,6 +702,12 @@ export class PostsService {
         message: 'Only scheduled posts can be cancelled',
       });
     }
+
+    const targetsToCancel = await this.postTargetModel.find({
+      postId: post._id,
+      workspaceId: workspaceObjectId,
+      status: PostTargetStatus.SCHEDULED,
+    });
 
     const session = await this.connection.startSession();
 
@@ -621,11 +733,25 @@ export class PostsService {
 
         await post.save({ session });
       });
-
-      return this.toSummary(post);
     } finally {
       await session.endSession();
     }
+
+    await Promise.all(
+      targetsToCancel.map(async (target) => {
+        const queueRemoved = await this.queueService.removeJob(
+          target._id.toString(),
+        );
+
+        if (!queueRemoved) {
+          console.error(
+            `Queue synchronization failed while cancelling post target ${target._id.toString()}`,
+          );
+        }
+      }),
+    );
+
+    return this.toSummary(post);
   }
 
   async listTargetsForPost(
@@ -633,6 +759,7 @@ export class PostsService {
     postId: string,
   ): Promise<PostTargetSummary[]> {
     const workspaceObjectId = this.toObjectId(workspaceId, 'workspaceId');
+
     const postObjectId = this.toObjectId(postId, 'postId');
 
     const targets = await this.postTargetModel.find({

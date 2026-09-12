@@ -1,4 +1,6 @@
 export enum PostTargetStatus {
   SCHEDULED = 'SCHEDULED',
+  PUBLISHING = 'PUBLISHING',
+  PUBLISHED = 'PUBLISHED',
   CANCELLED = 'CANCELLED',
 }

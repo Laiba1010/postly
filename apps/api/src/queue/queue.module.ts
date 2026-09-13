@@ -14,6 +14,7 @@ import {
 import { QueueService } from './queue.service';
 import { PublishWorker } from './publish.worker';
 import { ReconciliationService } from './reconciliation.service';
+import { MockPlatformModule } from '../mock-platform/mock-platform.module';
 
 @Global()
 @Module({
@@ -26,6 +27,7 @@ import { ReconciliationService } from './reconciliation.service';
         schema: PublishingAttemptSchema,
       },
     ]),
+    MockPlatformModule,
   ],
   providers: [QueueService, PublishWorker, ReconciliationService],
   exports: [QueueService, MongooseModule],

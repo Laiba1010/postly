@@ -9,32 +9,47 @@ import { Connection, Model } from 'mongoose';
 import { Worker, Job } from 'bullmq';
 import Redis from 'ioredis';
 import { Inject } from '@nestjs/common';
+
 import { REDIS_CLIENT } from '../redis/redis.module';
 import { PUBLISH_QUEUE_NAME } from './queue.constants';
 import { PublishJobData } from './queue.service';
+import { PublishFailureReason } from '../mock-platform/enums/publish-failure-reason.enum';
+
 import {
   PostTarget,
   PostTargetDocument,
 } from '../posts/schemas/post-target.schema';
 import { PostTargetStatus } from '../posts/enums/post-target-status.enum';
+
 import {
   PublishingAttempt,
   PublishingAttemptDocument,
 } from '../posts/schemas/publishing-attempt.schema';
 import { PublishingAttemptStatus } from '../posts/enums/publishing-attempt-status.enum';
 
+import { MockPlatformService } from '../mock-platform/mock-platform.service';
+import {
+  MockPublishResult,
+  isMockPublishFailure,
+} from '../mock-platform/mock-platform.types';
+
 @Injectable()
 export class PublishWorker implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PublishWorker.name);
+
   private worker: Worker<PublishJobData>;
 
   constructor(
     @Inject(REDIS_CLIENT) private readonly redisClient: Redis,
     @InjectConnection() private readonly connection: Connection,
+
     @InjectModel(PostTarget.name)
     private readonly postTargetModel: Model<PostTargetDocument>,
+
     @InjectModel(PublishingAttempt.name)
     private readonly publishingAttemptModel: Model<PublishingAttemptDocument>,
+
+    private readonly mockPlatformService: MockPlatformService,
   ) {}
 
   onModuleInit() {
@@ -42,7 +57,9 @@ export class PublishWorker implements OnModuleInit, OnModuleDestroy {
       PUBLISH_QUEUE_NAME,
       (job) => this.process(job),
       {
-        connection: this.redisClient.duplicate({ maxRetriesPerRequest: null }),
+        connection: this.redisClient.duplicate({
+          maxRetriesPerRequest: null,
+        }),
       },
     );
 
@@ -67,6 +84,7 @@ export class PublishWorker implements OnModuleInit, OnModuleDestroy {
       this.logger.log(
         `Skipping job jobId=${job.id} postTargetId=${postTargetId} reason=target-not-scheduled`,
       );
+
       return;
     }
 
@@ -124,6 +142,7 @@ export class PublishWorker implements OnModuleInit, OnModuleDestroy {
         this.logger.log(
           `Skipping job jobId=${job.id} postTargetId=${postTargetId} reason=race-target-changed`,
         );
+
         return;
       }
 
@@ -136,10 +155,58 @@ export class PublishWorker implements OnModuleInit, OnModuleDestroy {
       `Publishing started jobId=${job.id} workspaceId=${actualWorkspaceId} postId=${actualPostId} postTargetId=${postTargetId} platform=${actualPlatform} attemptNumber=${attemptNumber}`,
     );
 
-    // Phase 8 stub: proves the pipeline end-to-end without a real
-    // external call. Phase 9 replaces this block with the actual mock
-    // social platform integration; Phase 10 adds retry/failure handling
-    // around it. Deliberately not building either here.
+    // The external call happens outside any Mongo transaction — a slow
+    // (simulated) network call must never hold a DB transaction open.
+    //
+    // Scope boundary (Phase 9): this only records the immediate outcome
+    // of this one attempt. It does not decide whether a failure is
+    // retryable, schedule a retry, or compute backoff — those are
+    // Phase 10 responsibilities.
+    let result: MockPublishResult;
+
+    try {
+      result = await this.mockPlatformService.publish({
+        idempotencyKey: postTargetId,
+        attemptNumber,
+        postTargetId,
+        postId: actualPostId,
+        workspaceId: actualWorkspaceId,
+        platform: actualPlatform,
+      });
+    } catch (err) {
+      // The mock call itself is infrastructure (Redis, validation) — not a
+      // simulated platform response. Treat it as a publish failure so the
+      // target/attempt never dangles in PUBLISHING, then rethrow so BullMQ's
+      // own failure handling still surfaces it.
+      await this.markFailure(postTargetId, attemptNumber, {
+        outcome: 'FAILURE',
+        reason: PublishFailureReason.NETWORK_ERROR,
+        message: `Mock platform call threw unexpectedly: ${(err as Error).message}`,
+      });
+
+      this.logger.error(
+        `Mock platform call threw jobId=${job.id} postTargetId=${postTargetId}: ${
+          (err as Error).message
+        }`,
+      );
+
+      throw err;
+    }
+
+    // The mock platform returned a normal simulated failure response.
+    // Record the failure instead of incorrectly marking the target as
+    // published.
+    if (isMockPublishFailure(result)) {
+      await this.markFailure(postTargetId, attemptNumber, result);
+
+      this.logger.warn(
+        `Publishing failed jobId=${job.id} workspaceId=${actualWorkspaceId} postId=${actualPostId} postTargetId=${postTargetId} platform=${actualPlatform} attemptNumber=${attemptNumber} status=FAILED`,
+      );
+
+      return;
+    }
+
+    // Only a successful mock-platform result reaches this point.
     await this.markSuccess(postTargetId, attemptNumber);
 
     this.logger.log(
@@ -181,6 +248,61 @@ export class PublishWorker implements OnModuleInit, OnModuleDestroy {
           {
             $set: {
               status: PublishingAttemptStatus.SUCCESS,
+              completedAt: new Date(),
+            },
+          },
+          { session },
+        );
+
+        if (attemptResult.modifiedCount !== 1) {
+          throw new Error('ATTEMPT_NOT_PUBLISHING');
+        }
+      });
+    } finally {
+      await session.endSession();
+    }
+  }
+
+  private async markFailure(
+    postTargetId: string,
+    attemptNumber: number,
+    failure: Extract<MockPublishResult, { outcome: 'FAILURE' }>,
+  ): Promise<void> {
+    const errorMessage = failure.retryAfterMs
+      ? `${failure.reason}: ${failure.message} (retryAfterMs=${failure.retryAfterMs})`
+      : `${failure.reason}: ${failure.message}`;
+
+    const session = await this.connection.startSession();
+
+    try {
+      await session.withTransaction(async () => {
+        const result = await this.postTargetModel.updateOne(
+          {
+            _id: postTargetId,
+            status: PostTargetStatus.PUBLISHING,
+          },
+          {
+            $set: {
+              status: PostTargetStatus.FAILED,
+            },
+          },
+          { session },
+        );
+
+        if (result.modifiedCount !== 1) {
+          throw new Error('TARGET_NOT_PUBLISHING');
+        }
+
+        const attemptResult = await this.publishingAttemptModel.updateOne(
+          {
+            postTargetId,
+            attemptNumber,
+            status: PublishingAttemptStatus.PUBLISHING,
+          },
+          {
+            $set: {
+              status: PublishingAttemptStatus.FAILED,
+              errorMessage,
               completedAt: new Date(),
             },
           },

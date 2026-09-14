@@ -1,13 +1,15 @@
 import {
   ConflictException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
-import { Model, Types } from 'mongoose';
+import { ConfigService } from '@nestjs/config';
+import { InjectConnection, InjectModel } from '@nestjs/mongoose';
+import { Connection, Model } from 'mongoose';
 import { UsersService } from '../users/users.service';
 import { PasswordService } from './password/password.service';
 import { SessionsService } from '../sessions/sessions.service';
-import { InjectModel } from '@nestjs/mongoose';
 import {
   PasswordReset,
   PasswordResetDocument,
@@ -22,12 +24,16 @@ export interface PublicUser {
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly usersService: UsersService,
     private readonly passwordService: PasswordService,
     private readonly sessionsService: SessionsService,
+    @InjectConnection() private readonly connection: Connection,
     @InjectModel(PasswordReset.name)
     private readonly passwordResetModel: Model<PasswordResetDocument>,
+    private readonly configService: ConfigService,
   ) {}
 
   private hashToken(rawToken: string): string {
@@ -38,13 +44,11 @@ export class AuthService {
     const normalizedEmail = email.toLowerCase().trim();
     const user = await this.usersService.findByEmail(normalizedEmail);
 
-    // Always behave the same way whether or not the user exists —
-    // prevents account enumeration via this endpoint too.
     if (!user) return;
 
     const rawToken = randomBytes(32).toString('hex');
     const tokenHash = this.hashToken(rawToken);
-    const expiresAt = new Date(Date.now() + 1000 * 60 * 30); // 30 minutes
+    const expiresAt = new Date(Date.now() + 1000 * 60 * 30);
 
     await this.passwordResetModel.create({
       userId: user._id,
@@ -55,37 +59,72 @@ export class AuthService {
     const resetLink = `http://localhost:3000/reset-password?token=${rawToken}`;
 
     // TODO: replace with real email sending (out of MVP scope per spec).
-    // Logged here so the flow is testable end-to-end in development.
-    console.log(
-      `[DEV ONLY] Password reset link for ${normalizedEmail}: ${resetLink}`,
-    );
+    if (this.configService.get<string>('NODE_ENV') !== 'production') {
+      this.logger.log(
+        `[DEV ONLY] Password reset link for ${normalizedEmail}: ${resetLink}`,
+      );
+    }
   }
 
   async resetPassword(rawToken: string, newPassword: string): Promise<void> {
     const tokenHash = this.hashToken(rawToken);
+    const passwordHash = await this.passwordService.hash(newPassword);
+    const session = await this.connection.startSession();
+    let resetUserId: string | undefined;
 
-    const resetRecord = await this.passwordResetModel.findOne({
-      tokenHash,
-      usedAt: null,
-      expiresAt: { $gt: new Date() },
-    });
+    try {
+      await session.withTransaction(async () => {
+        // Claim the token and update the password in one Mongo transaction.
+        // This prevents concurrent replay and avoids leaving a claimed token
+        // behind if the password write fails.
+        const resetRecord = await this.passwordResetModel.findOneAndUpdate(
+          {
+            tokenHash,
+            usedAt: null,
+            expiresAt: { $gt: new Date() },
+          },
+          { $set: { usedAt: new Date() } },
+          { new: false, session },
+        );
 
-    if (!resetRecord) {
+        if (!resetRecord) {
+          throw new UnauthorizedException({
+            code: 'INVALID_RESET_TOKEN',
+            message: 'This password reset link is invalid or has expired',
+          });
+        }
+
+        resetUserId = resetRecord.userId.toString();
+
+        const updated = await this.usersService.updatePassword(
+          resetRecord.userId.toString(),
+          passwordHash,
+          session,
+        );
+
+        if (!updated) {
+          throw new UnauthorizedException({
+            code: 'USER_NOT_FOUND',
+            message: 'Unable to reset password for this account',
+          });
+        }
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    // Session auth is Redis-backed. Incrementing the user's session version
+    // makes every previously issued session invalid on its next request.
+    if (!resetUserId) {
       throw new UnauthorizedException({
-        code: 'INVALID_RESET_TOKEN',
-        message: 'This password reset link is invalid or has expired',
+        code: 'USER_NOT_FOUND',
+        message: 'Unable to reset password for this account',
       });
     }
 
-    const passwordHash = await this.passwordService.hash(newPassword);
-    await this.usersService.updatePassword(
-      resetRecord.userId.toString(),
-      passwordHash,
-    );
-
-    resetRecord.usedAt = new Date();
-    await resetRecord.save();
+    await this.sessionsService.invalidateUserSessions(resetUserId);
   }
+
   async signup(name: string, email: string, password: string) {
     const normalizedEmail = email.toLowerCase().trim();
 

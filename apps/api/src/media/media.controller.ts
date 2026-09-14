@@ -14,6 +14,10 @@ import {
 } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { diskStorage } from 'multer';
+import { randomUUID } from 'crypto';
+import { tmpdir } from 'os';
+import { basename } from 'path';
 import type { Response } from 'express';
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { WorkspaceGuard } from '../workspaces/guards/workspace.guard';
@@ -32,9 +36,15 @@ export class MediaController {
 
   @Post()
   @Roles(Role.OWNER, Role.EDITOR)
-  @Throttle({ default: { limit: 10, ttl: 60000 } }) // 10 uploads per minute
+  @Throttle({ default: { limit: 10, ttl: 60000 } })
   @UseInterceptors(
     FileInterceptor('file', {
+      storage: diskStorage({
+        destination: tmpdir(),
+        filename: (_req, file, cb) => {
+          cb(null, `postly-${randomUUID()}-${basename(file.originalname)}`);
+        },
+      }),
       limits: { fileSize: MEDIA_LIMITS.MAX_VIDEO_SIZE_BYTES },
     }),
   )
@@ -65,16 +75,27 @@ export class MediaController {
     @Param('mediaId') mediaId: string,
     @Res() res: Response,
   ) {
-    const { buffer, mimeType, filename } =
+    const { stream, mimeType, filename } =
       await this.mediaService.getFileForDownload(workspaceId, mediaId);
+
+    const safeFilename = basename(filename).replace(/[\r\n"\\]/g, '_');
+    const asciiFilename = safeFilename.replace(/[^\x20-\x7E]/g, '_');
+    const encodedFilename = encodeURIComponent(safeFilename);
 
     res.setHeader('Content-Type', mimeType);
     res.setHeader(
       'Content-Disposition',
-      `inline; filename="${encodeURIComponent(filename)}"`,
+      `inline; filename="${asciiFilename}"; filename*=UTF-8''${encodedFilename}`,
     );
     res.setHeader('Cache-Control', 'private, max-age=3600');
-    res.send(buffer);
+    stream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(HttpStatus.NOT_FOUND).end();
+      } else {
+        res.destroy();
+      }
+    });
+    stream.pipe(res);
   }
 
   @Delete(':mediaId')

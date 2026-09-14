@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { HealthModule } from './health/health.module';
 import { MongooseModule } from '@nestjs/mongoose';
+import Redis from 'ioredis';
 import * as Joi from 'joi';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
@@ -20,6 +21,9 @@ import { PostsModule } from './posts/posts.module';
 import { MediaModule } from './media/media.module';
 import { SocialConnectionsModule } from './social-connections/social-connections.module';
 import { QueueModule } from './queue/queue.module';
+
+import { REDIS_CLIENT } from './redis/redis.module';
+import { RedisThrottlerStorage } from './common/rate-limit/redis-throttler.storage';
 
 // add to imports array
 
@@ -40,12 +44,19 @@ import { QueueModule } from './queue/queue.module';
         CORS_ORIGIN: Joi.string().required(),
       }),
     }),
-    ThrottlerModule.forRoot([
-      {
-        ttl: 60000, // 1 minute
-        limit: 10, // 10 requests per minute globally as a baseline
-      },
-    ]),
+    ThrottlerModule.forRootAsync({
+      imports: [RedisModule],
+      inject: [REDIS_CLIENT],
+      useFactory: (redisClient: Redis) => ({
+        throttlers: [
+          {
+            ttl: 60000,
+            limit: 10,
+          },
+        ],
+        storage: new RedisThrottlerStorage(redisClient),
+      }),
+    }),
 
     MongooseModule.forRootAsync({
       imports: [ConfigModule],

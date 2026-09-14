@@ -33,11 +33,10 @@ export class QueueService implements OnModuleDestroy {
         delay: this.computeDelayMs(scheduledAt),
         ...JOB_OPTIONS,
       });
-
       return true;
     } catch (err) {
       this.logger.error(
-        `Failed to enqueue job jobId=${data.postTargetId}: ${(err as Error).message}`,
+        `Failed to enqueue job jobId=${data.postTargetId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return false;
     }
@@ -50,12 +49,9 @@ export class QueueService implements OnModuleDestroy {
     try {
       const job = await this.queue.getJob(data.postTargetId);
 
-      if (!job) {
-        return this.scheduleJob(data, newScheduledAt);
-      }
+      if (!job) return this.scheduleJob(data, newScheduledAt);
 
       const state = await job.getState();
-
       if (state !== 'delayed') {
         this.logger.warn(
           `Cannot reschedule jobId=${data.postTargetId}; job state=${state}`,
@@ -67,7 +63,7 @@ export class QueueService implements OnModuleDestroy {
       return true;
     } catch (err) {
       this.logger.error(
-        `Failed to reschedule jobId=${data.postTargetId}: ${(err as Error).message}`,
+        `Failed to reschedule jobId=${data.postTargetId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return false;
     }
@@ -76,32 +72,80 @@ export class QueueService implements OnModuleDestroy {
   async removeJob(postTargetId: string): Promise<boolean> {
     try {
       const existing = await this.queue.getJob(postTargetId);
-
-      if (!existing) {
-        return true;
-      }
+      if (!existing) return true;
 
       const state = await existing.getState();
-
-      if (state === 'delayed' || state === 'waiting') {
+      if (
+        state === 'delayed' ||
+        state === 'waiting' ||
+        state === 'failed' ||
+        state === 'completed' ||
+        state === 'prioritized'
+      ) {
         await existing.remove();
       }
-
       return true;
     } catch (err) {
       this.logger.error(
-        `Failed to remove job jobId=${postTargetId}: ${(err as Error).message}`,
+        `Failed to remove job jobId=${postTargetId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return false;
     }
   }
 
   /**
-   * Re-arms a deterministic job for a target that is already durably marked
-   * RETRYING. For manual retry, a retained failed BullMQ job can be retried
-   * directly. For reconciliation, a retained terminal job is removed and
-   * recreated with the requested delay.
+   * Removes all non-active publishing jobs belonging to a workspace. Active
+   * jobs are deliberately left alone: once the target is deleted from Mongo,
+   * the worker's durable lookup will safely treat them as stale and exit.
    */
+  async removeWorkspaceJobs(workspaceId: string): Promise<boolean> {
+    let success = true;
+    const states: Array<
+      | 'completed'
+      | 'delayed'
+      | 'failed'
+      | 'prioritized'
+      | 'waiting'
+      | 'waiting-children'
+    > = [
+      'completed',
+      'delayed',
+      'failed',
+      'prioritized',
+      'waiting',
+      'waiting-children',
+    ];
+
+    try {
+      for (const state of states) {
+        // Collect matching jobs before removing anything so pagination cannot
+        // skip entries as the underlying list shrinks.
+        const jobs = await this.queue.getJobs([state], 0, -1);
+        const workspaceJobs = jobs.filter(
+          (job) => job.data.workspaceId === workspaceId,
+        );
+
+        for (const job of workspaceJobs) {
+          try {
+            await job.remove();
+          } catch (err) {
+            success = false;
+            this.logger.error(
+              `Failed to remove workspace job jobId=${job.id} workspaceId=${workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          }
+        }
+      }
+    } catch (err) {
+      success = false;
+      this.logger.error(
+        `Failed to scan workspace queue jobs workspaceId=${workspaceId}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+
+    return success;
+  }
+
   async retryJob(data: PublishJobData, delayMs = 0): Promise<boolean> {
     try {
       const job = await this.queue.getJob(data.postTargetId);
@@ -117,7 +161,6 @@ export class QueueService implements OnModuleDestroy {
           await job.retry('failed');
           return true;
         }
-
         await job.remove();
         return this.scheduleJob(data, new Date(Date.now() + delayMs));
       }
@@ -145,17 +188,12 @@ export class QueueService implements OnModuleDestroy {
       return false;
     } catch (err) {
       this.logger.error(
-        `Failed to re-arm job jobId=${data.postTargetId}: ${(err as Error).message}`,
+        `Failed to re-arm job jobId=${data.postTargetId}: ${err instanceof Error ? err.message : String(err)}`,
       );
       return false;
     }
   }
 
-  /**
-   * Includes active jobs as well as waiting/delayed jobs. An active
-   * PUBLISHING target already has an execution owner and must not be
-   * duplicated by reconciliation.
-   */
   async getActiveJobIds(): Promise<Set<string>> {
     const activeJobIds = new Set<string>();
     const pageSize = 1_000;
@@ -169,15 +207,10 @@ export class QueueService implements OnModuleDestroy {
       );
 
       for (const job of jobs) {
-        if (job.id) {
-          activeJobIds.add(job.id);
-        }
+        if (job.id) activeJobIds.add(job.id);
       }
 
-      if (jobs.length < pageSize) {
-        break;
-      }
-
+      if (jobs.length < pageSize) break;
       start += pageSize;
     }
 

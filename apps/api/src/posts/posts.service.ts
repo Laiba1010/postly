@@ -2,10 +2,11 @@ import {
   BadRequestException,
   ForbiddenException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
-import { Connection, Model, Types } from 'mongoose';
+import { ClientSession, Connection, Model, Types } from 'mongoose';
 
 import { QueueService } from '../queue/queue.service';
 import { PostStatusAggregator } from './post-status-aggregator';
@@ -64,6 +65,8 @@ export interface PostSummary {
 
 @Injectable()
 export class PostsService {
+  private readonly logger = new Logger(PostsService.name);
+
   constructor(
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(Post.name)
@@ -139,6 +142,7 @@ export class PostsService {
     workspaceId: string,
     mediaIds: string[],
     currentPostId: string | null,
+    session?: ClientSession,
   ) {
     if (!mediaIds || mediaIds.length === 0) {
       return [];
@@ -162,10 +166,12 @@ export class PostsService {
 
     const objectIds = mediaIds.map((id) => new Types.ObjectId(id));
 
-    const media = await this.mediaModel.find({
+    const query = this.mediaModel.find({
       _id: { $in: objectIds },
       workspaceId: new Types.ObjectId(workspaceId),
     });
+    if (session) query.session(session);
+    const media = await query.exec();
 
     if (media.length !== mediaIds.length) {
       throw new BadRequestException({
@@ -222,20 +228,58 @@ export class PostsService {
       });
     }
 
-    const post = await this.postModel.create({
-      workspaceId: new Types.ObjectId(workspaceId),
-      authorId: new Types.ObjectId(authorId),
-      content: dto.content ?? '',
-      status: PostStatus.DRAFT,
-      destinations,
-      mediaIds,
-    });
+    const session = await this.connection.startSession();
+    let post!: PostDocument;
 
-    if (mediaIds.length > 0) {
-      await this.mediaModel.updateMany(
-        { _id: { $in: mediaIds } },
-        { postId: post._id },
-      );
+    try {
+      await session.withTransaction(async () => {
+        // Recheck attachment state inside the transaction so validation and
+        // association are protected against concurrent draft saves.
+        const lockedMediaIds = await this.resolveAndValidateMedia(
+          workspaceId,
+          dto.mediaIds ?? [],
+          null,
+          session,
+        );
+
+        post = await this.postModel
+          .create(
+            [
+              {
+                workspaceId: new Types.ObjectId(workspaceId),
+                authorId: new Types.ObjectId(authorId),
+                content: dto.content ?? '',
+                status: PostStatus.DRAFT,
+                destinations,
+                mediaIds: lockedMediaIds,
+              },
+            ],
+            { session },
+          )
+          .then((docs) => docs[0]);
+
+        if (lockedMediaIds.length > 0) {
+          const result = await this.mediaModel.updateMany(
+            {
+              _id: { $in: lockedMediaIds },
+              workspaceId: new Types.ObjectId(workspaceId),
+              postId: null,
+            },
+            { $set: { postId: post._id } },
+            { session },
+          );
+
+          if (result.modifiedCount !== lockedMediaIds.length) {
+            throw new BadRequestException({
+              code: 'MEDIA_ALREADY_ATTACHED',
+              message:
+                'One or more selected media items are already attached to another post',
+            });
+          }
+        }
+      });
+    } finally {
+      await session.endSession();
     }
 
     return this.toSummary(post);
@@ -317,26 +361,42 @@ export class PostsService {
       });
     }
 
-    const post = await this.postModel.findOne({
-      _id: new Types.ObjectId(postId),
-      workspaceId: new Types.ObjectId(workspaceId),
-    });
+    const session = await this.connection.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const post = await this.postModel
+          .findOne({
+            _id: new Types.ObjectId(postId),
+            workspaceId: new Types.ObjectId(workspaceId),
+            status: PostStatus.DRAFT,
+          })
+          .session(session)
+          .exec();
 
-    if (!post) {
-      throw new NotFoundException({
-        code: 'POST_NOT_FOUND',
-        message: 'Post not found',
+        if (!post) {
+          throw new NotFoundException({
+            code: 'POST_NOT_FOUND',
+            message: 'Post not found or is not a draft',
+          });
+        }
+
+        if (post.mediaIds.length > 0) {
+          await this.mediaModel.updateMany(
+            {
+              _id: { $in: post.mediaIds },
+              workspaceId: new Types.ObjectId(workspaceId),
+              postId: post._id,
+            },
+            { $set: { postId: null } },
+            { session },
+          );
+        }
+
+        await post.deleteOne({ session });
       });
+    } finally {
+      await session.endSession();
     }
-
-    if (post.mediaIds.length > 0) {
-      await this.mediaModel.updateMany(
-        { _id: { $in: post.mediaIds } },
-        { postId: null },
-      );
-    }
-
-    await post.deleteOne();
   }
 
   async updateDraft(
@@ -351,92 +411,123 @@ export class PostsService {
       });
     }
 
-    const post = await this.postModel.findOne({
-      _id: new Types.ObjectId(postId),
-      workspaceId: new Types.ObjectId(workspaceId),
-    });
+    const session = await this.connection.startSession();
+    let updatedPost!: PostDocument;
 
-    if (!post) {
-      throw new NotFoundException({
-        code: 'POST_NOT_FOUND',
-        message: 'Post not found',
+    try {
+      await session.withTransaction(async () => {
+        const post = await this.postModel
+          .findOne({
+            _id: new Types.ObjectId(postId),
+            workspaceId: new Types.ObjectId(workspaceId),
+          })
+          .session(session)
+          .exec();
+
+        if (!post) {
+          throw new NotFoundException({
+            code: 'POST_NOT_FOUND',
+            message: 'Post not found',
+          });
+        }
+
+        if (post.status !== PostStatus.DRAFT) {
+          throw new ForbiddenException({
+            code: 'POST_NOT_EDITABLE',
+            message: 'Only draft posts can be edited',
+          });
+        }
+
+        const previousMediaIds = (post.mediaIds || []).map((id) =>
+          id.toString(),
+        );
+
+        const destinations =
+          dto.destinations !== undefined
+            ? await this.resolveAndValidateDestinations(
+                workspaceId,
+                dto.destinations,
+              )
+            : post.destinations;
+
+        const mediaIds =
+          dto.mediaIds !== undefined
+            ? await this.resolveAndValidateMedia(
+                workspaceId,
+                dto.mediaIds,
+                postId,
+                session,
+              )
+            : post.mediaIds;
+
+        const content = dto.content !== undefined ? dto.content : post.content;
+
+        const platformErrors = validateAgainstPlatformRules(
+          content,
+          destinations,
+          mediaIds.length,
+        );
+
+        if (platformErrors.length > 0) {
+          throw new BadRequestException({
+            code: 'PLATFORM_VALIDATION_FAILED',
+            message:
+              'Content does not meet the requirements for one or more selected platforms',
+            errors: platformErrors,
+          });
+        }
+
+        const newMediaIds = mediaIds.map((id) => id.toString());
+        const added = newMediaIds.filter(
+          (id) => !previousMediaIds.includes(id),
+        );
+        const removed = previousMediaIds.filter(
+          (id) => !newMediaIds.includes(id),
+        );
+
+        if (added.length > 0) {
+          const result = await this.mediaModel.updateMany(
+            {
+              _id: { $in: added.map((id) => new Types.ObjectId(id)) },
+              workspaceId: new Types.ObjectId(workspaceId),
+              postId: null,
+            },
+            { $set: { postId: post._id } },
+            { session },
+          );
+
+          if (result.modifiedCount !== added.length) {
+            throw new BadRequestException({
+              code: 'MEDIA_ALREADY_ATTACHED',
+              message:
+                'One or more selected media items are already attached to another post',
+            });
+          }
+        }
+
+        if (removed.length > 0) {
+          await this.mediaModel.updateMany(
+            {
+              _id: { $in: removed.map((id) => new Types.ObjectId(id)) },
+              workspaceId: new Types.ObjectId(workspaceId),
+              postId: post._id,
+            },
+            { $set: { postId: null } },
+            { session },
+          );
+        }
+
+        post.content = content;
+        post.destinations = destinations as any;
+        post.mediaIds = mediaIds as any;
+        await post.save({ session });
+        updatedPost = post;
       });
+    } finally {
+      await session.endSession();
     }
 
-    if (post.status !== PostStatus.DRAFT) {
-      throw new ForbiddenException({
-        code: 'POST_NOT_EDITABLE',
-        message: 'Only draft posts can be edited',
-      });
-    }
-
-    const previousMediaIds = (post.mediaIds || []).map((id) => id.toString());
-
-    const destinations =
-      dto.destinations !== undefined
-        ? await this.resolveAndValidateDestinations(
-            workspaceId,
-            dto.destinations,
-          )
-        : post.destinations;
-
-    const mediaIds =
-      dto.mediaIds !== undefined
-        ? await this.resolveAndValidateMedia(workspaceId, dto.mediaIds, postId)
-        : post.mediaIds;
-
-    const content = dto.content !== undefined ? dto.content : post.content;
-
-    const platformErrors = validateAgainstPlatformRules(
-      content,
-      destinations,
-      mediaIds.length,
-    );
-
-    if (platformErrors.length > 0) {
-      throw new BadRequestException({
-        code: 'PLATFORM_VALIDATION_FAILED',
-        message:
-          'Content does not meet the requirements for one or more selected platforms',
-        errors: platformErrors,
-      });
-    }
-
-    post.content = content;
-    post.destinations = destinations as any;
-    post.mediaIds = mediaIds as any;
-
-    await post.save();
-
-    const newMediaIds = (mediaIds || []).map((id) => id.toString());
-
-    const added = newMediaIds.filter((id) => !previousMediaIds.includes(id));
-
-    const removed = previousMediaIds.filter((id) => !newMediaIds.includes(id));
-
-    if (added.length > 0) {
-      await this.mediaModel.updateMany(
-        {
-          _id: {
-            $in: added.map((id) => new Types.ObjectId(id)),
-          },
-        },
-        { postId: post._id },
-      );
-    }
-
-    if (removed.length > 0) {
-      await this.mediaModel.updateMany(
-        {
-          _id: {
-            $in: removed.map((id) => new Types.ObjectId(id)),
-          },
-        },
-        { postId: null },
-      );
-    }
-
-    return this.toSummary(post);
+    return this.toSummary(updatedPost);
   }
 
   async scheduleDraft(
@@ -574,7 +665,7 @@ export class PostsService {
             // Do not throw here: throwing would make the HTTP request look
             // like a failed schedule even though the post is already
             // SCHEDULED in MongoDB.
-            console.error(
+            this.logger.error(
               `Queue synchronization failed for scheduled post target ${target._id.toString()}`,
             );
           }
@@ -671,7 +762,7 @@ export class PostsService {
         );
 
         if (!queueSynced) {
-          console.error(
+          this.logger.error(
             `Queue synchronization failed while rescheduling post target ${target._id.toString()}`,
           );
         }

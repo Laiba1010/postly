@@ -1,187 +1,1404 @@
-# Postly
+Postly
 
-Multi-tenant social media scheduling & publishing platform for small marketing and content teams.
+Multi-tenant social media scheduling and publishing SaaS for small marketing and content teams.
 
-Built as a portfolio case study demonstrating reliable asynchronous publishing architecture, multi-tenant workspace isolation, and production-oriented backend engineering — not just another CRUD dashboard.
+Postly is a portfolio case study focused on a real asynchronous publishing workflow rather than a simple CRUD dashboard. The core technical story is:
 
----
+Create → Preview → Schedule → Queue → Publish → Monitor → Success/Failure → Retry
 
-## Tech Stack
+Each destination platform is represented by an independent PostTarget, allowing one platform to succeed while another fails or retries.
 
-**Frontend**
+Documentation scope: This README documents the implementation through Phase 10 — Retry, Attempts & Failure Management. Later roadmap phases are intentionally not described as implemented here, even where the repository contains placeholders or UI prepared for future work.
 
-- Next.js (App Router) + React + TypeScript
-- Tailwind CSS + shadcn/ui (Base UI primitives)
-- TanStack Query (server state)
-- Zustand (client UI state)
-- React Hook Form + Zod
+Current Status
 
-**Backend**
+Implemented through Phase 10
 
-- Node.js + NestJS + TypeScript
-- MongoDB (Mongoose) — replica set enabled for multi-document transactions
-- Redis (ioredis) — sessions + future BullMQ queue storage
-- `@node-rs/argon2` — password hashing (Argon2id, prebuilt native binary, no build-tools required)
+Phase
 
-**Infrastructure**
+Area
 
-- Docker Compose (MongoDB + Redis, local dev)
-- pnpm workspaces (monorepo: `apps/api`, `apps/web`)
+Status
 
----
+0
 
-## Prerequisites
+Product & Architecture Foundation
 
-- Node.js 20 LTS (Node 22 has known ESM/CJS compatibility issues with NestJS CLI tooling as of this build)
-- pnpm
-- Docker Desktop
+✅ Defined / approved
 
----
+1
 
-## Setup
+Project Foundation
 
-```bash
-docker compose up -d
-docker exec -it postly-mongodb mongosh --eval "rs.initiate({_id: 'rs0', members: [{_id: 0, host: 'localhost:27017'}]})"
-pnpm install
-pnpm dev
-```
+✅ Implemented
 
-- Frontend: http://localhost:3000
-- Backend: http://localhost:4000/api/health
+2
 
-### Environment Configuration
+Authentication
 
-Copy `.env.example` → `.env` in `apps/api`, and `.env.example` → `.env.local` in `apps/web`. Never commit `.env` or `.env.local` — only `.env.example` files are tracked in git.
+✅ Implemented
 
-Required backend variables:
+3
 
-```
+Workspace & Team / RBAC
+
+✅ Implemented
+
+4
+
+Application Shell & Dashboard
+
+✅ Implemented
+
+5
+
+Social Account Connection
+
+✅ Implemented with mock OAuth
+
+6
+
+Post Composer & Media
+
+✅ Implemented
+
+7
+
+Scheduling Engine
+
+✅ Implemented
+
+8
+
+BullMQ Publishing Infrastructure
+
+✅ Implemented
+
+9
+
+Mock Social Platform
+
+✅ Implemented
+
+10
+
+Retry, Attempts & Failure Management
+
+✅ Implemented
+
+The next roadmap phase is Phase 11 — Job Status Updates. It is intentionally outside the scope of this README.
+
+1. Product
+
+What Postly Does
+
+Postly helps small marketing and content teams create, organize, schedule, and reliably publish social media content from a shared workspace.
+
+The product combines:
+
+Multi-tenant workspaces
+
+Team collaboration
+
+Role-based access control
+
+Social account connections
+
+Content creation
+
+Media management
+
+Scheduling
+
+Asynchronous publishing
+
+Per-platform publishing state
+
+Retry and failure handling
+
+Observable publishing attempts
+
+Target Users
+
+Primary users include:
+
+Social media managers
+
+Content creators
+
+Marketing managers
+
+Small agency teams
+
+Typical team size: 2–10 people.
+
+Core Differentiator
+
+Postly is intentionally more than a CRUD application.
+
+Its main technical differentiator is reliable asynchronous multi-platform publishing with observable status, retries, idempotency, and failure recovery.
+
+Publishing is therefore modeled as a domain workflow instead of a single published: true/false field.
+
+2. Architecture Principles
+
+The implementation follows these core invariants:
+
+Every workspace resource is scoped to a workspace.
+
+Protected workspace actions are authorized server-side.
+
+Multi-platform posts use independent PostTarget records.
+
+Each PostTarget has its own publishing lifecycle.
+
+PublishingAttempt belongs to a PostTarget.
+
+BullMQ job identity is deterministic.
+
+Scheduled timestamps are normalized to UTC.
+
+Social credentials are encrypted at rest.
+
+The frontend never talks directly to MongoDB or Redis.
+
+Publishing is asynchronous.
+
+Publishing failures are observable.
+
+Retry behavior is idempotent.
+
+A post can represent partial publication.
+
+High-risk publishing behavior receives targeted tests.
+
+Structured logs must not expose credentials or other secrets.
+
+The project is developed incrementally. A later phase should not silently change an earlier architectural decision.
+
+3. Technology Stack
+
+Frontend
+
+Next.js App Router
+
+React
+
+TypeScript
+
+Tailwind CSS
+
+shadcn/ui / Base UI primitives
+
+TanStack Query for server state
+
+Zustand for client UI state
+
+React Hook Form
+
+Zod
+
+Backend
+
+Node.js
+
+NestJS
+
+TypeScript
+
+MongoDB
+
+Mongoose
+
+Redis
+
+ioredis
+
+BullMQ
+
+@node-rs/argon2 for Argon2id password hashing
+
+Joi for environment configuration validation
+
+class-validator / class-transformer
+
+Sharp for image processing
+
+Infrastructure
+
+pnpm workspaces
+
+Docker Compose
+
+MongoDB single-node replica set for local development/transactions
+
+Redis
+
+4. Repository Structure
+
+postly/
+├── apps/
+│ ├── api/ # NestJS backend
+│ │ └── src/
+│ │ ├── auth/ # Signup, login, logout, password reset
+│ │ ├── users/ # User domain
+│ │ ├── sessions/ # Redis-backed sessions
+│ │ ├── workspaces/ # Workspace lifecycle + isolation
+│ │ ├── memberships/ # Workspace members + RBAC
+│ │ ├── invitations/ # Invitation lifecycle
+│ │ ├── social-connections/ # Mock OAuth + connections
+│ │ ├── media/ # Upload, validation, storage
+│ │ ├── posts/ # Posts, targets, scheduling, aggregation
+│ │ ├── queue/ # BullMQ queue, worker, retries, reconciliation
+│ │ ├── mock-platform/ # Mock external publishing API
+│ │ ├── redis/ # Redis infrastructure
+│ │ ├── health/ # Health checks
+│ │ └── common/ # Guards, decorators, errors, shared backend logic
+│ │
+│ └── web/ # Next.js frontend
+│ └── src/
+│ ├── app/ # Routes and layouts
+│ ├── components/ # UI and domain components
+│ ├── hooks/ # Client hooks
+│ └── lib/ # API clients, hooks, validation, state
+│
+├── docker-compose.yml
+├── package.json
+├── pnpm-lock.yaml
+├── pnpm-workspace.yaml
+└── README.md
+
+5. Phase 0 — Product & Architecture Foundation
+
+Status: ✅ Approved
+
+Phase 0 established the source of truth for the product and implementation.
+
+Product Model
+
+Core product loop:
+
+CREATE
+↓
+PREVIEW
+↓
+SCHEDULE
+↓
+QUEUE
+↓
+PUBLISH
+↓
+MONITOR
+↓
+SUCCESS / FAILURE
+↓
+RETRY
+↓
+PUBLISHED
+
+Core Domain
+
+The architecture defines these primary entities:
+
+User
+
+Session
+
+Workspace
+
+Membership
+
+Invitation
+
+SocialConnection
+
+Post
+
+PostTarget
+
+Media
+
+PublishingAttempt
+
+Workspace Model
+
+User
+↓
+Membership
+↓
+Workspace
+↓
+Workspace resources
+
+Roles:
+
+OWNER
+
+EDITOR
+
+VIEWER
+
+Backend authorization is the security boundary. Frontend permission checks are only a UX layer.
+
+Publishing Model
+
+Post
+├── Instagram PostTarget
+├── Facebook PostTarget
+├── LinkedIn PostTarget
+└── X PostTarget
+
+Each target can independently publish, fail, or retry.
+
+Architectural Decisions
+
+One owner per workspace.
+
+Ownership transfer is not supported in the MVP.
+
+Workspace owner cannot remove or demote themselves.
+
+Invitations expire after 7 days.
+
+Pending invitations can be revoked.
+
+Published posts are not edited in place as a publishing operation; duplication is used when appropriate.
+
+Cancellation does not attempt to interrupt an already active PUBLISHING operation.
+
+Media has explicit cleanup rules and a storage abstraction.
+
+PostTargetStatus uses PUBLISHED rather than SUCCESS.
+
+Post status is derived from target state.
+
+6. Phase 1 — Project Foundation
+
+Status: ✅ Implemented
+
+Monorepo
+
+The repository uses pnpm workspaces:
+
+apps/api
+apps/web
+
+Backend Foundation
+
+NestJS module architecture
+
+Environment configuration
+
+Joi configuration validation
+
+Global API prefix: /api
+
+Global request validation
+
+Consistent exception response foundation
+
+CORS configuration
+
+Structured application logging foundation
+
+Mongoose connection
+
+Redis connection
+
+Health checks
+
+Database
+
+MongoDB is accessed through Mongoose.
+
+A local MongoDB replica set is used because multi-document transactions are required by important workflows such as workspace creation and invitation acceptance.
+
+Redis
+
+Redis is used for:
+
+Session storage
+
+BullMQ infrastructure
+
+Mock-platform idempotency state
+
+Rate limiting where configured
+
+Health Check
+
+GET /api/health
+
+The health endpoint checks the application dependencies, including MongoDB and Redis.
+
+Media Foundation
+
+The media layer uses a storage abstraction so local development storage does not permanently lock the application to a filesystem implementation.
+
+7. Phase 2 — Authentication
+
+Status: ✅ Implemented
+
+Authentication Flow
+
+Implemented endpoints include:
+
+Signup
+
+Login
+
+Logout
+
+GET /auth/me
+
+Forgot password
+
+Reset password
+
+Password Security
+
+Passwords use Argon2id through @node-rs/argon2.
+
+Raw passwords are never persisted.
+
+Sessions
+
+Sessions are stored in Redis.
+
+The raw session token is held by the browser in a secure cookie. Redis stores a SHA-256 hash of the token rather than the raw token.
+
+Session behavior includes:
+
+HttpOnly cookie
+
+Secure-cookie configuration
+
+SameSite configuration
+
+Sliding session expiry
+
+Session invalidation on logout
+
+CSRF Protection
+
+Unsafe HTTP methods are protected using CSRF/origin validation appropriate to the cookie-based session model.
+
+Rate Limiting
+
+The API has global rate limiting with stricter limits on sensitive authentication operations such as:
+
+Signup
+
+Login
+
+Forgot password
+
+Password Reset
+
+Reset tokens are:
+
+Randomly generated
+
+Stored only as hashes
+
+Expiring
+
+Single-use
+
+Development builds can expose reset links through the backend development output instead of sending real email. Real email delivery is outside the current Phase 0–10 scope.
+
+8. Phase 3 — Workspace & Team Management
+
+Status: ✅ Implemented
+
+Workspace Operations
+
+Implemented workspace functionality includes:
+
+Create workspace
+
+List user's workspaces
+
+Retrieve workspace
+
+Rename workspace
+
+Delete workspace
+
+Workspace creation is transactional so the workspace and its initial owner membership are created together.
+
+Workspace Isolation
+
+Every workspace-scoped API operation requires membership validation.
+
+A workspace ID in a URL is never treated as proof of authorization.
+
+Request
+↓
+AuthGuard
+↓
+WorkspaceGuard
+↓
+RolesGuard (when required)
+↓
+Service-level workspace-scoped query
+
+Roles
+
+Owner
+
+Can:
+
+Manage workspace settings
+
+Manage members
+
+Manage roles
+
+Invite members
+
+Remove members
+
+Manage social connections
+
+Manage posts
+
+Editor
+
+Can:
+
+Create/edit posts
+
+Manage drafts
+
+Schedule/reschedule/cancel posts
+
+Manage social connections according to the architecture
+
+Retry failed publishing targets
+
+Cannot manage workspace membership or owner-level settings.
+
+Viewer
+
+Read-only access where permitted.
+
+Cannot perform workspace mutations, create/edit posts, or manually retry publishing targets.
+
+Owner Invariant
+
+A workspace must always have exactly one owner.
+
+Owner self-removal and self-demotion are rejected.
+
+Invitations
+
+Invitation lifecycle:
+
+PENDING
+↓
+ACCEPTED
+
+or:
+
+PENDING
+↓
+EXPIRED / REVOKED
+
+Invitation tokens are hashed before persistence.
+
+Acceptance verifies the authenticated user's email against the invitation email.
+
+Invitation acceptance is transactional so membership creation and invitation consumption stay consistent.
+
+9. Phase 4 — Application Shell & Dashboard
+
+Status: ✅ Implemented
+
+The application shell provides the usable SaaS workspace around the real backend context.
+
+Implemented UI includes:
+
+Sidebar
+
+Header
+
+Workspace switcher
+
+Workspace navigation
+
+Dashboard
+
+KPI/status areas
+
+Upcoming posts area
+
+Failed activity area
+
+Connected-account information
+
+Quick-create entry points
+
+Loading/empty/error states where applicable
+
+Permission-aware UI behavior
+
+The active workspace is persisted client-side for UX convenience, but authorization is always rechecked by the backend.
+
+The workspace selector also self-heals when its stored workspace ID becomes stale or inaccessible.
+
+10. Phase 5 — Social Account Connection
+
+Status: ✅ Implemented with mock OAuth
+
+Supported Mock Platforms
+
+Instagram
+
+Facebook
+
+LinkedIn
+
+X
+
+Flow
+
+Connect
+↓
+Mock OAuth
+↓
+Authorize
+↓
+Callback
+↓
+Validate
+↓
+SocialConnection
+
+Connection Management
+
+Implemented operations include:
+
+Start mock OAuth
+
+Handle callback
+
+Create connection
+
+List workspace connections
+
+Disconnect connection
+
+Track connection state
+
+Multiple accounts per provider are supported.
+
+The uniqueness boundary is based on the workspace, provider, and external account ID.
+
+Credential Security
+
+Access and refresh credentials are encrypted at rest using an application-level encryption key supplied through environment configuration.
+
+Credentials are not returned unnecessarily and are not included in structured logs.
+
+Real platform OAuth and real publishing APIs are intentionally outside Phase 0–10.
+
+11. Phase 6 — Post Composer & Media
+
+Status: ✅ Implemented
+
+Posts
+
+Implemented draft operations include:
+
+Create draft
+
+Read draft
+
+Update draft
+
+Delete draft
+
+Duplicate draft
+
+List drafts
+
+Only Owner/Editor roles can mutate posts. Viewer is read-only.
+
+Media
+
+Implemented media functionality includes:
+
+Upload
+
+Metadata persistence
+
+MIME validation
+
+Size validation
+
+Image processing/validation
+
+Preview/download access
+
+Media removal
+
+Post association
+
+Storage abstraction
+
+Cleanup handling
+
+Platform Rules
+
+Platform-aware rules are centralized rather than duplicated across UI components.
+
+Supported platforms at this stage:
+
+Instagram
+
+Facebook
+
+LinkedIn
+
+X
+
+Media Safety
+
+The upload layer applies size and type restrictions and avoids treating a client-provided MIME type as the only source of truth.
+
+Media access is workspace-scoped.
+
+12. Phase 7 — Scheduling Engine
+
+Status: ✅ Implemented
+
+Scheduling accepts:
+
+Local date
+
+Local time
+
+Timezone
+
+The backend converts the requested local time into a canonical UTC timestamp.
+
+Local date +
+Local time +
+Timezone
+↓
+UTC
+↓
+Post.scheduledAt
+↓
+PostTarget.scheduledAt
+
+PostTargets
+
+A scheduled post creates one independent target per destination platform.
+
+Example:
+
+Post
+├── Instagram Target
+├── Facebook Target
+└── LinkedIn Target
+
+Scheduling Operations
+
+Schedule draft
+
+Reschedule scheduled post
+
+Cancel schedule
+
+Scheduling Rules
+
+The backend handles:
+
+Past timestamps
+
+Invalid timezones
+
+Timezone conversion
+
+DST-sensitive timestamps
+
+Duplicate scheduling requests
+
+State validation
+
+Cancellation
+
+Cancellation updates pending targets and coordinates with the queue.
+
+An already active PUBLISHING target is not forcefully interrupted by the MVP cancellation path. The worker rechecks target state to avoid publishing stale/cancelled work.
+
+13. Phase 8 — BullMQ Publishing Infrastructure
+
+Status: ✅ Implemented
+
+Postly uses BullMQ with Redis for asynchronous publishing.
+
+Job Identity
+
+There is exactly one logical publishing job per PostTarget.
+
+The deterministic BullMQ job ID is:
+
+PostTarget.id
+
+This allows scheduling and rescheduling to coordinate with the same publishing identity.
+
+Queue Flow
+
+Scheduled PostTarget
+↓
+BullMQ / Redis
+↓
+Worker
+↓
+Load PostTarget
+↓
+Verify current state
+↓
+PUBLISHING
+↓
+Create / resume PublishingAttempt
+↓
+Execute mock platform publish
+
+Worker Responsibilities
+
+The worker handles:
+
+Stale-job checks
+
+Target state transitions
+
+Publishing attempt creation
+
+External/mock publishing
+
+Success handling
+
+Failure handling
+
+Retry scheduling
+
+Idempotent replay
+
+Parent post status aggregation
+
+Graceful shutdown
+
+Queue Retention
+
+Completed and failed BullMQ jobs are retained in bounded quantities rather than indefinitely, preventing unbounded Redis job accumulation.
+
+Reconciliation
+
+A reconciliation service repairs queue/database drift by finding publishable targets that do not have the expected queue work.
+
+The database remains the durable source of publishing state; Redis is the asynchronous execution mechanism.
+
+14. Phase 9 — Mock Social Platform
+
+Status: ✅ Implemented
+
+The mock platform simulates the behavior of an external social publishing API instead of making the worker depend on a hard-coded success response.
+
+Simulated Outcomes
+
+The mock platform can produce:
+
+Success
+
+RATE_LIMITED
+
+NETWORK_ERROR
+
+PLATFORM_ERROR
+
+INVALID_MEDIA
+
+AUTH_ERROR
+
+The default scenario distribution intentionally favors successful publishing while still producing realistic failures for demonstrations and testing.
+
+Simulated Latency
+
+The mock platform introduces non-zero simulated latency so the worker behaves more like it is communicating with a real external service.
+
+Idempotency
+
+Publishing requests use a deterministic idempotency key derived from the publishing target and attempt identity.
+
+Resolved mock-platform outcomes are cached for a bounded period so replaying the same operation does not create a second external publication.
+
+15. Phase 10 — Retry, Attempts & Failure Management
+
+Status: ✅ Implemented
+
+Phase 10 is the main reliability layer of the MVP publishing architecture.
+
+PublishingAttempt
+
+Every actual publish attempt gets its own durable record.
+
+Important fields include:
+
+postTargetId
+
+attemptNumber
+
+status
+
+errorCode
+
+errorMessage
+
+startedAt
+
+completedAt
+
+createdAt
+
+A unique (postTargetId, attemptNumber) constraint prevents duplicate attempt records.
+
+Failure Classification
+
+Retryable
+
+RATE_LIMITED
+
+NETWORK_ERROR
+
+PLATFORM_ERROR
+
+Permanent
+
+INVALID_MEDIA
+
+AUTH_ERROR
+
+Automatic Retry
+
+Automatic retry uses exponential backoff.
+
+Current configuration:
+
+MAX_PUBLISH_ATTEMPTS = 3
+BASE_DELAY = 1 second
+MULTIPLIER = 2
+
+The resulting automatic retry delays begin at:
+
+1s → 2s → 4s
+
+retryCount represents the lifetime number of automatic retries already scheduled. Manual retry does not reset that value.
+
+Target Lifecycle
+
+SCHEDULED
+↓
+PUBLISHING
+├──→ PUBLISHED
+│
+├──→ RETRYING
+│ ↓
+│ PUBLISHING
+│
+└──→ FAILED
+
+Post Aggregation
+
+The parent post status is derived from its target states.
+
+Important cases:
+
+All targets SCHEDULED
+→ SCHEDULED
+
+Any target PUBLISHING / RETRYING
+→ PUBLISHING
+
+All targets PUBLISHED
+→ PUBLISHED
+
+All targets FAILED
+→ FAILED
+
+Published + failed targets
+→ PARTIALLY_PUBLISHED
+
+CANCELLED remains authoritative when the post itself has been cancelled.
+
+Manual Retry
+
+Manual retry operates at the target level.
+
+Only failed targets are retried. Successfully published targets are never republished just because another target failed.
+
+The failed target transition is guarded atomically to prevent two concurrent manual retry requests from both claiming the same target.
+
+Idempotency / Failure Recovery
+
+Phase 10 explicitly handles:
+
+Worker restart during an attempt
+
+Duplicate job delivery
+
+External success followed by worker failure
+
+Replayed publish requests
+
+Automatic retry exhaustion
+
+Manual retry
+
+Manual retry races
+
+Partial publication
+
+Duplicate terminal resolution
+
+The worker resumes an existing open attempt where appropriate instead of blindly creating another external operation.
+
+16. End-to-End Publishing Flow Through Phase 10
+
+User
+↓
+Composer
+↓
+Draft
+↓
+Select platforms
+↓
+Create PostTargets
+↓
+Schedule
+↓
+UTC normalization
+↓
+BullMQ delayed job(s)
+↓
+Worker
+↓
+PUBLISHING
+↓
+PublishingAttempt
+↓
+Mock Social Platform
+├───────────────┐
+↓ ↓
+SUCCESS FAILURE
+↓ ↓
+PUBLISHED classify error
+↓
+┌────────┴────────┐
+↓ ↓
+Retryable Permanent
+↓ ↓
+RETRYING FAILED
+↓
+Backoff delay
+↓
+PUBLISHING
+↓
+Success / Failed
+↓
+Aggregate Post Status
+
+For a multi-platform post:
+
+Post
+├── Instagram → PUBLISHED
+├── Facebook → RETRYING
+└── LinkedIn → PUBLISHED
+
+The parent remains in an active publishing state while the failed target can recover independently.
+
+If Facebook eventually succeeds:
+
+Post
+├── Instagram → PUBLISHED
+├── Facebook → PUBLISHED
+└── LinkedIn → PUBLISHED
+
+The parent becomes:
+
+PUBLISHED
+
+17. Security Model Through Phase 10
+
+Security is implemented as each feature is introduced rather than postponed to a later hardening phase.
+
+Authentication
+
+Argon2id password hashing
+
+Hashed session tokens
+
+HttpOnly cookies
+
+Secure cookie configuration
+
+SameSite configuration
+
+CSRF protection
+
+Origin validation
+
+Authentication guards
+
+Safe authentication errors
+
+Rate limiting
+
+Multi-Tenancy
+
+Workspace membership required
+
+Workspace-scoped service queries
+
+Server-side RBAC
+
+Cross-workspace access rejected
+
+Resource IDs are never treated as sufficient authorization
+
+Credentials
+
+Social access/refresh credentials encrypted at rest
+
+Encryption key supplied through environment configuration
+
+Credentials are not intentionally returned in normal API responses
+
+Credentials are not logged
+
+Media
+
+Upload size limits
+
+MIME/type validation
+
+Workspace-scoped access
+
+Cleanup handling
+
+Storage abstraction
+
+Queue Security
+
+Logs may contain operational identifiers such as:
+
+workspace ID
+
+post ID
+
+target ID
+
+job ID
+
+attempt number
+
+platform
+
+status
+
+error code
+
+timestamp
+
+They must not contain access tokens, refresh tokens, session tokens, reset tokens, or other credentials.
+
+18. Data Integrity & Reliability
+
+Important workflows use MongoDB transactions where multiple related records must change together.
+
+Examples include:
+
+Workspace + owner membership creation
+
+Invitation acceptance
+
+Target state + attempt state + parent status transitions
+
+Manual retry state transition
+
+Other Phase 0–10 multi-document operations where atomicity is required
+
+Queue/database coordination intentionally does not pretend MongoDB and Redis share a distributed transaction.
+
+The design uses durable database state plus deterministic queue identity and reconciliation to recover from queue/database drift.
+
+19. Testing Through Phase 10
+
+The project uses Jest for backend tests.
+
+Targeted tests cover important low-level behavior such as:
+
+Password hashing behavior
+
+Retry policy
+
+Authentication/security behavior where tests are present
+
+High-risk publishing state logic where introduced
+
+The project also relies on integration/manual verification for critical end-to-end workflows during incremental development.
+
+The broader unit/integration/E2E testing expansion remains a later roadmap concern; this README does not claim Phase 21-level test coverage.
+
+20. Environment Configuration
+
+Copy the API environment example into the local environment and provide the required secrets.
+
+Typical backend configuration:
+
 NODE_ENV=development
 PORT=4000
 DATABASE_URL=mongodb://localhost:27017/postly?replicaSet=rs0
 REDIS_URL=redis://localhost:6379
-SESSION_SECRET=<32+ char random string>
-TOKEN_ENCRYPTION_KEY=<32+ char random string>
+SESSION_SECRET=<strong-random-secret>
+TOKEN_ENCRYPTION_KEY=<strong-random-secret>
 CORS_ORIGIN=http://localhost:3000
-```
 
-Required frontend variables:
+Frontend:
 
-```
 NEXT_PUBLIC_API_URL=http://localhost:4000
-```
 
----
+Never commit real environment files or secrets.
 
-## What's Implemented So Far
+21. Local Development
 
-### Phase 1 — Project Foundation ✅
+Prerequisites
 
-- Monorepo (pnpm workspaces): `apps/api` (NestJS), `apps/web` (Next.js)
-- Docker Compose: MongoDB (replica set enabled) + Redis, both with healthchecks
-- Environment configuration with Joi validation at boot (`@nestjs/config`) — app refuses to start with missing/invalid required env vars
-- MongoDB connection via Mongoose, Redis connection via ioredis
-- `GET /api/health` — reports API, MongoDB, and Redis status individually (via `@nestjs/terminus`)
-- Global API prefix (`/api`), CORS configured for the frontend origin
-- Consistent global error contract via `AllExceptionsFilter` — every error returns `{ statusCode, code, message, path, timestamp }`
-- ESLint + Prettier across both apps, root-level `pnpm dev` / `pnpm lint` / `pnpm format` scripts
+Node.js
 
-### Phase 2 — Authentication ✅
+pnpm
 
-- Signup, login, logout, `GET /auth/me`
-- Passwords hashed with Argon2id (`@node-rs/argon2`)
-- Sessions stored in Redis, **keyed by SHA-256 hash of the session token** (raw token never persisted — only the browser holds it, via HttpOnly cookie)
-- Sliding session expiry (7 days, refreshed on each authenticated request)
-- `AuthGuard` — resolves session → user, attaches to `request.user`, reusable across all future modules
-- CSRF protection — `CsrfGuard` validates `Origin`/`Referer` header on all unsafe HTTP methods
-- Rate limiting (`@nestjs/throttler`) — global baseline + stricter limits on auth endpoints (signup, login, forgot-password)
-- Forgot password / reset password flow — reset tokens hashed (SHA-256) with TTL auto-expiry via MongoDB index; reset link is logged to the backend console in development (see Deviations)
-- Frontend: signup/login forms (React Hook Form + Zod + shadcn `Field` pattern), TanStack Query `useCurrentUser()` hook, protected route layout, cross-links (Sign up ↔ Log in ↔ Forgot password) with corrected UX placement (forgot-password inline with the password field, not buried below unrelated links)
+Docker Desktop
 
-### Phase 3 — Workspace & RBAC ✅
+Start Infrastructure
 
-- **Workspace** — create, list (scoped to the user's own memberships), get-by-id, rename (Owner-only)
-- **Membership** — `User × Workspace → Role`, unique compound index prevents duplicate memberships
-- Workspace creation is **atomic** (MongoDB transaction): workspace + OWNER membership are created together or not at all — no orphan workspaces possible
-- **`WorkspaceGuard`** — every workspace-scoped route independently re-verifies membership server-side; a `workspaceId` in a URL is never trusted on its own
-- **`RolesGuard` + `@Roles()` decorator** — layered on top of `WorkspaceGuard` for Owner-only operations (rename workspace, invite members, change roles, remove members)
-- **Owner invariants enforced at the service layer**: exactly one Owner per workspace; Owner cannot remove or demote themselves; a workspace can never be left without an Owner
-- **Invitations** — email + role based, token hashed (SHA-256, never stored in plaintext), 7-day expiry, single-use, duplicate-pending-invitation prevention via partial unique index, email-match enforcement on acceptance (prevents a forwarded link being claimed by the wrong account)
-- **Invitation acceptance** — atomic (membership + invitation-accepted marked together in one transaction); idempotent if the user is already a member
-- **Auto-accept UX** — clicking "Accept & sign up" or "Log in to accept" carries the invitation through the auth flow via a `redirect` + `autoAccept` query param, so the user is never asked to confirm the same action twice (except when a genuine email mismatch requires it)
-- **Frontend**: workspace switcher (self-healing — silently recovers if `localStorage`'s cached active workspace becomes stale/invalid, rather than showing an error), Team page (member list, role changes, removal with destructive confirmation), workspace settings (Owner-editable, read-only for others), invite dialog, pending invitations list
-- **`RoleControl`** — single shared component renders the Owner/Editor/Viewer pill consistently whether it's a static badge or an interactive dropdown, eliminating visual drift between read-only and editable states
+docker compose up -d
 
-#### Phase 3 — Manually Verified (live API, real accounts, real HTTP requests)
+The local MongoDB instance is configured as a replica set for transaction support.
 
-All of the following were tested end-to-end against the running backend, not just reviewed in code:
+If the replica set has not yet been initialized in a fresh environment, initialize it according to the Docker MongoDB setup used by this repository.
 
-- Exactly one Owner maintained (self-demote and self-remove both correctly rejected: `400 CANNOT_DEMOTE_OWNER` / `400 CANNOT_REMOVE_OWNER`)
-- Editor blocked from: changing roles, removing members, sending invitations, renaming workspace (all `403 INSUFFICIENT_ROLE`); confirmed Editor **can** view members (`200`)
-- Viewer blocked from the same four actions as Editor; confirmed Viewer **can** view members
-- Removed member loses access immediately, even with an existing valid session (`403 NOT_A_MEMBER` on their very next request)
-- Cross-workspace isolation: User A cannot access User B's workspace by ID (`403 NOT_A_MEMBER`), and a nonexistent workspace ID returns the identical error (no enumeration signal)
-- Invitation expiration enforced (`400 INVITATION_EXPIRED`) — verified by backdating an invitation's `expiresAt` in MongoDB and confirming acceptance is rejected
+Install Dependencies
 
----
+pnpm install
 
-## Architectural Notes & Deviations
+Start Applications
 
-Recorded per the project's own "Source of Truth" principle — architectural decisions should be explicit, not silent.
+pnpm dev
 
-- **Password hashing library changed mid-project.** Originally attempted with `argon2` (native, requires `node-gyp`/Visual Studio Build Tools on Windows — installation failed in this dev environment). Switched to `@node-rs/argon2`, a Rust/NAPI-RS binding with prebuilt cross-platform binaries. Final result still uses Argon2id exactly as originally specified — only the underlying package changed, not the algorithm.
+Or individually:
 
-- **Route naming: `/dashboard` and `/workspace/new` instead of `/app/dashboard` and `/app/workspace/new`.** The architecture spec's route tree specifies an `/app/...` prefix for protected routes. This project intentionally keeps the flatter structure instead. Functionally equivalent — both are behind the same route-protection layout and the same backend authorization boundary — this is a naming preference, not a security or architecture difference.
+pnpm dev:api
+pnpm dev:web
 
-- **Root route (`/`) behavior was unspecified in the original architecture document.** The spec's route tree lists `/` as existing but never defines its behavior, and no development phase explicitly owns it. Implemented as an auth-aware redirect (authenticated → `/dashboard`, unauthenticated → `/login`) rather than a marketing landing page, since Postly has no marketing content at this MVP stage.
+Typical local addresses:
 
-- **Password reset and invitation emails are not actually sent.** Real email delivery is out of MVP scope per the architecture spec. Both flows log their link to the backend console (`[DEV ONLY]` prefix) instead, so each flow remains fully testable end-to-end in development. Swapping in a real email provider (e.g. Resend, Postmark) later only requires replacing the `console.log` calls in `AuthService.forgotPassword()` and `InvitationsService.createInvitation()` — token generation, hashing, expiry, and validation are already production-shaped.
+Frontend: http://localhost:3000
 
-- **Workspace context uses client-side active-workspace state (Zustand + localStorage) rather than a workspace-scoped URL structure** (e.g. `/workspaces/:id/dashboard`). The architecture spec permits either approach as long as server-side membership validation is enforced on every request — which it is, via `WorkspaceGuard`, and has been explicitly verified by tampering with `localStorage` directly and confirming the app self-heals rather than leaking unauthorized data.
+API health: http://localhost:4000/api/health
 
-- **Workspace slug is system-generated and immutable.** Users only provide a workspace name; the backend generates and guarantees a unique slug. This avoids the slug ever being treated as (or confused with) an authorization mechanism, and avoids broken links if a slug were later editable.
+Quality Commands
 
-- **MongoDB replica set enabled in local development** (single-node `rs0`) specifically to support multi-document transactions, which are required for atomic workspace creation (workspace + Owner membership) and atomic invitation acceptance (membership + invitation-accepted). This is a deliberate infra decision, not default Docker Mongo behavior.
+pnpm lint
+pnpm format
 
-- **Automated test suite deferred for both Phase 2 (authentication) and Phase 3 (workspace/RBAC).** All security-critical behavior — session handling, CSRF, rate limiting, RBAC boundaries, Owner invariants, cross-workspace isolation, invitation expiration — was manually verified against the live API with real accounts and real HTTP requests, and the exact expected status codes/error bodies were confirmed. Automated coverage is intentionally deferred; if this authorization logic is refactored later, this manual verification should be re-run or converted into automated tests at that time.
+Backend commands:
 
----
+pnpm --filter api build
+pnpm --filter api test
+pnpm --filter api test:cov
 
-## Project Structure
+22. Phase Completion Philosophy
 
-```
-postly/
-├── apps/
-│   ├── api/                    # NestJS backend
-│   │   └── src/
-│   │       ├── auth/           # signup, login, logout, /me, sessions, guards, password reset
-│   │       ├── users/          # user schema + service
-│   │       ├── sessions/       # Redis-backed session storage (hashed tokens)
-│   │       ├── workspaces/     # workspace CRUD, WorkspaceGuard, workspace context
-│   │       ├── memberships/    # member list, role changes, removal
-│   │       ├── invitations/    # invite creation, preview, accept
-│   │       ├── redis/          # global Redis client provider
-│   │       └── common/         # RolesGuard, @Roles decorator, exception filter, Role enum
-│   └── web/                    # Next.js frontend
-│       └── src/
-│           ├── app/
-│           │   ├── (auth)/     # login, signup, forgot-password, reset-password, invitations/[token]
-│           │   └── (dashboard)/# dashboard, team, settings, workspace/new
-│           ├── components/
-│           │   ├── auth/       # login-form, signup-form
-│           │   └── workspace/  # workspace-switcher, invite-member-dialog, role-control, etc.
-│           └── lib/
-│               ├── api/        # typed API client functions per domain
-│               ├── hooks/      # TanStack Query hooks
-│               └── stores/     # Zustand (active workspace only — no server data)
-├── docker-compose.yml
-├── pnpm-workspace.yaml
-└── package.json
-```
+A phase is not considered complete merely because its UI renders.
 
----
+Each phase follows the project's incremental execution rule:
 
-## Next Phase
+Product Goal
+↓
+User Stories
+↓
+UX / UI Decisions
+↓
+Architecture
+↓
+Data Model
+↓
+API Contract
+↓
+Frontend
+↓
+Backend
+↓
+Integration
+↓
+Edge Cases
+↓
+Targeted Tests
+↓
+Review / Refactor
+↓
+Phase Approval
+↓
+Next Phase
 
-**Phase 4 — App Shell + Dashboard** (polished sidebar, header, navigation, final workspace switcher placement — Phase 3 intentionally built only a functional, non-polished version of these).
+The implementation should challenge assumptions, preserve approved architectural decisions, and avoid silently introducing infrastructure for later phases.
+
+23. Phase 0–10 Boundary
+
+The system demonstrated by the end of Phase 10 is:
+
+Authentication
+↓
+Workspace + Team + RBAC
+↓
+Social Connections
+↓
+Composer + Media
+↓
+Draft
+↓
+Scheduling + UTC
+↓
+PostTargets
+↓
+BullMQ
+↓
+Worker
+↓
+Mock Platform
+↓
+PublishingAttempt
+↓
+Success / Failure
+↓
+Retry + Backoff
+↓
+Aggregate Status
+
+This is the intended Phase 0–10 foundation for the later MVP work. Later capabilities such as richer status monitoring, complete posts management, calendar, drag-and-drop scheduling, DLQ, webhooks, carousels, analytics, AI assistance, production hardening, broader testing, and deployment/observability are intentionally outside this README's implementation boundary.
+
+Source of Truth
+
+Postly's product and architecture specification is the source of truth for architectural decisions. The incremental roadmap defines the implementation sequence.
+
+If implementation and architecture conflict:
+
+Stop and identify the conflict.
+
+Determine whether the implementation is wrong, the specification needs amendment, or the feature should be deferred.
+
+Do not silently introduce an architectural change.

@@ -4,11 +4,14 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  Logger,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model, Types } from 'mongoose';
 import { randomUUID } from 'crypto';
+import { open, unlink } from 'fs/promises';
 import sharp from 'sharp';
+import { Readable } from 'stream';
 import { Media, MediaDocument } from './schemas/media.schema';
 import { MediaType } from './enums/media-type.enum';
 import { MEDIA_LIMITS, extensionForMimeType } from './constants/media-limits';
@@ -34,29 +37,29 @@ export interface MediaSummary {
 
 @Injectable()
 export class MediaService {
+  private readonly logger = new Logger(MediaService.name);
+
   constructor(
     @InjectModel(Media.name) private readonly mediaModel: Model<MediaDocument>,
     @Inject(STORAGE_PROVIDER) private readonly storage: StorageProvider,
   ) {}
 
-  /**
-   * Validates file signature, extracts image metadata, persists file to storage provider,
-   * and saves media metadata document in MongoDB.
-   */
   async upload(params: {
     workspaceId: string;
     userId: string;
     file: Express.Multer.File;
   }): Promise<MediaSummary> {
-    if (!params.file || !params.file.buffer) {
+    const filePath = params.file?.path;
+    const hasBuffer = Boolean(params.file?.buffer);
+
+    if (!params.file || (!filePath && !hasBuffer)) {
       throw new BadRequestException({
         code: 'INVALID_FILE',
-        message: 'No file buffer provided for upload',
+        message: 'No upload data was provided',
       });
     }
 
-    // 1. Magic-byte MIME type validation
-    const detectedMime = detectMimeFromBuffer(params.file.buffer);
+    const detectedMime = await this.detectMime(params.file);
 
     if (!detectedMime) {
       throw new BadRequestException({
@@ -79,10 +82,10 @@ export class MediaService {
       });
     }
 
-    // 2. Size limit checks
     const maxSize = isImage
       ? MEDIA_LIMITS.MAX_IMAGE_SIZE_BYTES
       : MEDIA_LIMITS.MAX_VIDEO_SIZE_BYTES;
+
     if (params.file.size > maxSize) {
       throw new BadRequestException({
         code: 'FILE_TOO_LARGE',
@@ -90,13 +93,14 @@ export class MediaService {
       });
     }
 
-    // 3. Extract Image Metadata (width, height, aspectRatio)
     let metadata:
-      { width?: number; height?: number; aspectRatio?: number } | undefined =
-      undefined;
+      { width?: number; height?: number; aspectRatio?: number } | undefined;
+
     if (isImage) {
       try {
-        const imgMeta = await sharp(params.file.buffer).metadata();
+        const image = filePath ? sharp(filePath) : sharp(params.file.buffer);
+        const imgMeta = await image.metadata();
+
         if (imgMeta.width && imgMeta.height) {
           metadata = {
             width: imgMeta.width,
@@ -105,41 +109,65 @@ export class MediaService {
           };
         }
       } catch {
-        // Fall back gracefully if sharp fails to parse corrupt image streams
+        throw new BadRequestException({
+          code: 'INVALID_MEDIA_CONTENT',
+          message: 'The uploaded image could not be decoded',
+        });
       }
     }
 
-    // 4. Save to Storage Provider
     const generatedFilename = `${randomUUID()}${extensionForMimeType(detectedMime)}`;
-    const { storageKey } = await this.storage.save({
-      workspaceId: params.workspaceId,
-      filename: generatedFilename,
-      buffer: params.file.buffer,
-    });
+    let storageKey: string | undefined;
 
-    // 5. Create Database Record
-    const media = await this.mediaModel.create({
-      workspaceId: new Types.ObjectId(params.workspaceId),
-      uploadedBy: new Types.ObjectId(params.userId),
-      originalName: params.file.originalname,
-      mimeType: detectedMime,
-      size: params.file.size,
-      storageKey,
-      mediaType: isImage ? MediaType.IMAGE : MediaType.VIDEO,
-      postId: null,
-      metadata,
-    });
+    try {
+      const saved = filePath
+        ? await this.storage.saveFromFile({
+            workspaceId: params.workspaceId,
+            filename: generatedFilename,
+            filePath,
+          })
+        : await this.storage.save({
+            workspaceId: params.workspaceId,
+            filename: generatedFilename,
+            buffer: params.file.buffer,
+          });
 
-    return this.toSummary(media);
+      storageKey = saved.storageKey;
+
+      const media = await this.mediaModel.create({
+        workspaceId: new Types.ObjectId(params.workspaceId),
+        uploadedBy: new Types.ObjectId(params.userId),
+        originalName: params.file.originalname,
+        mimeType: detectedMime,
+        size: params.file.size,
+        storageKey,
+        mediaType: isImage ? MediaType.IMAGE : MediaType.VIDEO,
+        postId: null,
+        metadata,
+      });
+
+      return this.toSummary(media);
+    } catch (err) {
+      if (storageKey) {
+        try {
+          await this.storage.delete(storageKey);
+        } catch {
+          // Preserve the original failure. Cleanup sweep cannot recover a
+          // file without a Mongo document, so best-effort cleanup is explicit.
+        }
+      }
+      throw err;
+    } finally {
+      if (filePath) {
+        await unlink(filePath).catch(() => undefined);
+      }
+    }
   }
 
-  /**
-   * Retrieves raw file buffer and headers for stream/download handlers.
-   */
   async getFileForDownload(
     workspaceId: string,
     mediaId: string,
-  ): Promise<{ buffer: Buffer; mimeType: string; filename: string }> {
+  ): Promise<{ stream: Readable; mimeType: string; filename: string }> {
     if (!Types.ObjectId.isValid(mediaId)) {
       throw new BadRequestException({
         code: 'INVALID_ID',
@@ -159,13 +187,13 @@ export class MediaService {
       });
     }
 
-    const buffer = await this.storage.read(media.storageKey);
-    return { buffer, mimeType: media.mimeType, filename: media.originalName };
+    return {
+      stream: this.storage.createReadStream(media.storageKey),
+      mimeType: media.mimeType,
+      filename: media.originalName,
+    };
   }
 
-  /**
-   * User-facing media deletion. Blocks deletion if media is currently attached to a saved post.
-   */
   async delete(workspaceId: string, mediaId: string): Promise<void> {
     if (!Types.ObjectId.isValid(mediaId)) {
       throw new BadRequestException({
@@ -194,16 +222,47 @@ export class MediaService {
       });
     }
 
-    await this.storage.delete(media.storageKey);
-    await media.deleteOne();
+    const deleted = await this.mediaModel.findOneAndDelete({
+      _id: media._id,
+      workspaceId: new Types.ObjectId(workspaceId),
+      postId: null,
+    });
+
+    if (!deleted) {
+      throw new ForbiddenException({
+        code: 'MEDIA_CHANGED',
+        message: 'Media changed before it could be deleted',
+      });
+    }
+
+    try {
+      await this.storage.delete(deleted.storageKey);
+    } catch (err) {
+      // The DB deletion is durable. Do not restore the record because that
+      // would reintroduce an attachment race. Storage cleanup is best-effort.
+      this.logger.error(
+        `Failed to delete media file mediaId=${deleted._id.toString()} storageKey=${deleted.storageKey}: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
-  /**
-   * System helper used by PostsService (on draft deletion) and MediaCleanupService (on orphan sweep)
-   * to delete physical files directly from storage.
-   */
   async deleteFileByStorageKey(storageKey: string): Promise<void> {
     await this.storage.delete(storageKey);
+  }
+
+  private async detectMime(file: Express.Multer.File): Promise<string | null> {
+    if (file.path) {
+      const handle = await open(file.path, 'r');
+      try {
+        const header = Buffer.alloc(12);
+        const { bytesRead } = await handle.read(header, 0, 12, 0);
+        return detectMimeFromBuffer(header.subarray(0, bytesRead));
+      } finally {
+        await handle.close();
+      }
+    }
+
+    return detectMimeFromBuffer(file.buffer);
   }
 
   private toSummary(m: MediaDocument): MediaSummary {

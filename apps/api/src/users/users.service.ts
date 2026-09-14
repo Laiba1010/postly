@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { ClientSession, Model } from 'mongoose';
 import { User, UserDocument } from './schemas/user.schema';
 
 @Injectable()
@@ -13,8 +13,18 @@ export class UsersService {
       .select('+passwordHash')
       .exec();
   }
-  async updatePassword(userId: string, passwordHash: string): Promise<void> {
-    await this.userModel.findByIdAndUpdate(userId, { passwordHash }).exec();
+
+  async updatePassword(
+    userId: string,
+    passwordHash: string,
+    session?: ClientSession,
+  ): Promise<boolean> {
+    const result = await this.userModel.updateOne(
+      { _id: userId },
+      { $set: { passwordHash } },
+      session ? { session } : undefined,
+    );
+    return result.modifiedCount === 1;
   }
 
   async findById(id: string): Promise<UserDocument | null> {

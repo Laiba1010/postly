@@ -1,10 +1,32 @@
-import { Module, Global } from '@nestjs/common';
+import {
+  Global,
+  Injectable,
+  Logger,
+  Module,
+  Inject,
+  OnModuleDestroy,
+} from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import Redis from 'ioredis';
-import { Logger } from '@nestjs/common';
-const logger = new Logger('RedisModule');
 
+const logger = new Logger('RedisModule');
 export const REDIS_CLIENT = 'REDIS_CLIENT';
+
+@Injectable()
+class RedisLifecycleService implements OnModuleDestroy {
+  constructor(@Inject(REDIS_CLIENT) private readonly redisClient: Redis) {}
+
+  async onModuleDestroy(): Promise<void> {
+    try {
+      await this.redisClient.quit();
+    } catch (err) {
+      logger.error(
+        `Failed to close Redis connection: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      this.redisClient.disconnect();
+    }
+  }
+}
 
 @Global()
 @Module({
@@ -25,6 +47,7 @@ export const REDIS_CLIENT = 'REDIS_CLIENT';
         return client;
       },
     },
+    RedisLifecycleService,
   ],
   exports: [REDIS_CLIENT],
 })

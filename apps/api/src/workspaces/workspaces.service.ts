@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Connection, Model, Types } from 'mongoose';
 import { Workspace, WorkspaceDocument } from './schemas/workspace.schema';
@@ -8,7 +8,6 @@ import {
 } from '../memberships/schemas/membership.schema';
 import { Role } from '../common/enums/role.enum';
 import { slugify, randomSuffix } from '../common/utils/slugify';
-import { NotFoundException } from '@nestjs/common';
 import {
   SocialConnection,
   SocialConnectionDocument,
@@ -17,6 +16,19 @@ import {
   Invitation,
   InvitationDocument,
 } from '../invitations/schemas/invitation.schema';
+import { Post, PostDocument } from '../posts/schemas/post.schema';
+import {
+  PostTarget,
+  PostTargetDocument,
+} from '../posts/schemas/post-target.schema';
+import {
+  PublishingAttempt,
+  PublishingAttemptDocument,
+} from '../posts/schemas/publishing-attempt.schema';
+import { Media, MediaDocument } from '../media/schemas/media.schema';
+import { QueueService } from '../queue/queue.service';
+import { MediaService } from '../media/media.service';
+import { Inject, forwardRef } from '@nestjs/common';
 
 export interface WorkspaceWithRole {
   id: string;
@@ -27,6 +39,8 @@ export interface WorkspaceWithRole {
 
 @Injectable()
 export class WorkspacesService {
+  private readonly logger = new Logger(WorkspacesService.name);
+
   constructor(
     @InjectConnection() private readonly connection: Connection,
     @InjectModel(Workspace.name)
@@ -37,7 +51,19 @@ export class WorkspacesService {
     private readonly socialConnectionModel: Model<SocialConnectionDocument>,
     @InjectModel(Invitation.name)
     private readonly invitationModel: Model<InvitationDocument>,
+    @InjectModel(Post.name)
+    private readonly postModel: Model<PostDocument>,
+    @InjectModel(PostTarget.name)
+    private readonly postTargetModel: Model<PostTargetDocument>,
+    @InjectModel(PublishingAttempt.name)
+    private readonly publishingAttemptModel: Model<PublishingAttemptDocument>,
+    @InjectModel(Media.name)
+    private readonly mediaModel: Model<MediaDocument>,
+    private readonly queueService: QueueService,
+    @Inject(forwardRef(() => MediaService))
+    private readonly mediaService: MediaService,
   ) {}
+
   private async generateUniqueSlug(name: string): Promise<string> {
     const base = slugify(name) || 'workspace';
     let candidate = base;
@@ -47,7 +73,6 @@ export class WorkspacesService {
       attempt += 1;
       candidate = `${base}-${randomSuffix()}`;
       if (attempt > 5) {
-        // Extremely unlikely, but never loop forever
         candidate = `${base}-${Date.now()}`;
         break;
       }
@@ -102,7 +127,7 @@ export class WorkspacesService {
       .exec();
 
     return memberships
-      .filter((m) => m.workspaceId) // guard against orphaned membership edge case
+      .filter((m) => m.workspaceId)
       .map((m) => ({
         id: m.workspaceId._id.toString(),
         name: m.workspaceId.name,
@@ -115,6 +140,8 @@ export class WorkspacesService {
     userId: string,
     workspaceId: string,
   ): Promise<Role | null> {
+    if (!Types.ObjectId.isValid(workspaceId)) return null;
+
     const membership = await this.membershipModel
       .findOne({
         userId: new Types.ObjectId(userId),
@@ -124,13 +151,12 @@ export class WorkspacesService {
 
     return membership ? membership.role : null;
   }
+
   async getWorkspaceContext(
     userId: string,
     workspaceId: string,
   ): Promise<WorkspaceWithRole | null> {
-    if (!Types.ObjectId.isValid(workspaceId)) {
-      return null;
-    }
+    if (!Types.ObjectId.isValid(workspaceId)) return null;
 
     const membership = await this.membershipModel
       .findOne({
@@ -139,14 +165,10 @@ export class WorkspacesService {
       })
       .exec();
 
-    if (!membership) {
-      return null;
-    }
+    if (!membership) return null;
 
     const workspace = await this.workspaceModel.findById(workspaceId).exec();
-    if (!workspace) {
-      return null;
-    }
+    if (!workspace) return null;
 
     return {
       id: workspace._id.toString(),
@@ -155,6 +177,7 @@ export class WorkspacesService {
       role: membership.role,
     };
   }
+
   async updateWorkspace(
     workspaceId: string,
     updates: { name?: string },
@@ -176,16 +199,25 @@ export class WorkspacesService {
       id: workspace._id.toString(),
       name: workspace.name,
       slug: workspace.slug,
-      role: Role.OWNER, // caller already knows the role from WorkspaceGuard; controller will merge it
+      role: Role.OWNER,
     };
   }
+
+  /**
+   * Deletes all Phase 0–10 workspace-owned domain records in one Mongo
+   * transaction, then removes derived BullMQ jobs and physical media files.
+   * Redis/storage cannot participate in the Mongo transaction, so they are
+   * deliberately handled after the durable database deletion.
+   */
   async deleteWorkspace(workspaceId: string): Promise<void> {
+    const workspaceObjectId = new Types.ObjectId(workspaceId);
     const session = await this.connection.startSession();
+    let storageKeys: string[] = [];
 
     try {
       await session.withTransaction(async () => {
         const workspace = await this.workspaceModel
-          .findById(workspaceId)
+          .findById(workspaceObjectId)
           .session(session)
           .exec();
 
@@ -196,30 +228,80 @@ export class WorkspacesService {
           });
         }
 
-        // Cascade across every domain that currently references a workspace.
-        // If a future phase (Posts, Media, PostTargets, ...) introduces a new
-        // workspace-scoped collection, it must be added here too — this is
-        // the single place workspace cascade-delete is owned.
-        await this.membershipModel.deleteMany(
-          { workspaceId: workspace._id },
+        const media = await this.mediaModel
+          .find({ workspaceId: workspaceObjectId })
+          .select('storageKey')
+          .session(session)
+          .lean()
+          .exec();
+
+        const targets = await this.postTargetModel
+          .find({ workspaceId: workspaceObjectId })
+          .select('_id')
+          .session(session)
+          .lean()
+          .exec();
+
+        storageKeys = media.map((item) => item.storageKey);
+        const targetIds = targets.map((item) => item._id);
+
+        if (targetIds.length > 0) {
+          await this.publishingAttemptModel.deleteMany(
+            { postTargetId: { $in: targetIds } },
+            { session },
+          );
+        }
+
+        await this.postTargetModel.deleteMany(
+          { workspaceId: workspaceObjectId },
+          { session },
+        );
+        await this.postModel.deleteMany(
+          { workspaceId: workspaceObjectId },
+          { session },
+        );
+        await this.mediaModel.deleteMany(
+          { workspaceId: workspaceObjectId },
           { session },
         );
         await this.socialConnectionModel.deleteMany(
-          { workspaceId: workspace._id },
+          { workspaceId: workspaceObjectId },
           { session },
         );
         await this.invitationModel.deleteMany(
-          { workspaceId: workspace._id },
+          { workspaceId: workspaceObjectId },
+          { session },
+        );
+        await this.membershipModel.deleteMany(
+          { workspaceId: workspaceObjectId },
           { session },
         );
 
         await this.workspaceModel.deleteOne(
-          { _id: workspace._id },
+          { _id: workspaceObjectId },
           { session },
         );
       });
     } finally {
       await session.endSession();
+    }
+
+    const queueCleaned =
+      await this.queueService.removeWorkspaceJobs(workspaceId);
+    if (!queueCleaned) {
+      this.logger.error(
+        `Workspace queue cleanup incomplete workspaceId=${workspaceId}`,
+      );
+    }
+
+    for (const storageKey of storageKeys) {
+      try {
+        await this.mediaService.deleteFileByStorageKey(storageKey);
+      } catch (err) {
+        this.logger.error(
+          `Failed to delete workspace media file workspaceId=${workspaceId} storageKey=${storageKey}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 }

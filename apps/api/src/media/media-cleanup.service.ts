@@ -2,6 +2,9 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { Cron, CronExpression } from '@nestjs/schedule';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
+import { readdir, stat, unlink } from 'fs/promises';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { Media, MediaDocument } from './schemas/media.schema';
 import { MEDIA_LIMITS } from './constants/media-limits';
 import {
@@ -37,12 +40,53 @@ export class MediaCleanupService {
     });
 
     for (const orphan of orphans) {
-      await this.storage.delete(orphan.storageKey);
-      await orphan.deleteOne();
+      const deleted = await this.mediaModel.findOneAndDelete({
+        _id: orphan._id,
+        postId: null,
+      });
+
+      if (!deleted) continue;
+
+      try {
+        await this.storage.delete(deleted.storageKey);
+      } catch (err) {
+        this.logger.error(
+          `Failed to delete orphan media file mediaId=${deleted._id.toString()} storageKey=${deleted.storageKey}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
 
     if (orphans.length > 0) {
       this.logger.log(`Cleaned up ${orphans.length} orphaned media file(s)`);
+    }
+
+    await this.cleanupUploadTempFiles();
+  }
+
+  private async cleanupUploadTempFiles(): Promise<void> {
+    const now = Date.now();
+    const tempDirectory = tmpdir();
+
+    try {
+      const entries = await readdir(tempDirectory);
+
+      for (const entry of entries) {
+        if (!entry.startsWith('postly-')) continue;
+
+        const fullPath = join(tempDirectory, entry);
+        try {
+          const info = await stat(fullPath);
+          if (now - info.mtimeMs > 60 * 60 * 1000) {
+            await unlink(fullPath).catch(() => undefined);
+          }
+        } catch {
+          // The file may have been removed by a completed upload concurrently.
+        }
+      }
+    } catch (err) {
+      this.logger.error(
+        `Failed to clean upload temp files: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 }

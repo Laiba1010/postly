@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Media, MediaSchema } from './schemas/media.schema';
 import { MediaService } from './media.service';
@@ -13,7 +13,7 @@ import { WorkspacesModule } from '../workspaces/workspaces.module';
   imports: [
     MongooseModule.forFeature([{ name: Media.name, schema: MediaSchema }]),
     AuthModule,
-    WorkspacesModule,
+    forwardRef(() => WorkspacesModule),
   ],
   controllers: [MediaController],
   providers: [

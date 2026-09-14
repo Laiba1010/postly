@@ -89,7 +89,7 @@ export class PublishWorker implements OnModuleInit, OnModuleDestroy {
     token?: string,
   ): Promise<void> {
     const { postTargetId } = job.data;
-    const context = await this.startOrResumeAttempt(postTargetId, job.id);
+    const context = await this.startOrResumeAttempt(job, token);
 
     if (!context) {
       return;
@@ -146,18 +146,20 @@ export class PublishWorker implements OnModuleInit, OnModuleDestroy {
    * number is reused.
    */
   private async startOrResumeAttempt(
-    postTargetId: string,
-    jobId: string | undefined,
+    job: Job<PublishJobData>,
+    token?: string,
   ): Promise<AttemptContext | null> {
+    const postTargetId = job.data.postTargetId;
+
     const existing = await this.postTargetModel
-      .findById(postTargetId)
-      .select('_id postId workspaceId platform status')
+      .findById(job.data.postTargetId)
+      .select('_id postId workspaceId platform status scheduledAt')
       .lean()
       .exec();
 
     if (!existing) {
       this.logger.warn(
-        `Skipping stale job jobId=${jobId} postTargetId=${postTargetId} reason=target-not-found`,
+        `Skipping stale job jobId=${job.id} postTargetId=${job.data.postTargetId} reason=target-not-found`,
       );
       return null;
     }
@@ -168,7 +170,7 @@ export class PublishWorker implements OnModuleInit, OnModuleDestroy {
       existing.status === PostTargetStatus.CANCELLED
     ) {
       this.logger.log(
-        `Skipping job jobId=${jobId} postTargetId=${postTargetId} reason=terminal-target status=${existing.status}`,
+        `Skipping job jobId=${job.id} postTargetId=${job.data.postTargetId} reason=terminal-target status=${existing.status}`,
       );
       return null;
     }
@@ -178,6 +180,22 @@ export class PublishWorker implements OnModuleInit, OnModuleDestroy {
       postId: existing.postId.toString(),
       platform: existing.platform,
     };
+
+    if (existing.status === PostTargetStatus.SCHEDULED) {
+      const scheduledAtMs = existing.scheduledAt.getTime();
+
+      // The queue is derived state. If an old queue entry fires after a
+      // reschedule, move that same job back to the durable MongoDB time
+      // instead of publishing early.
+      if (scheduledAtMs > Date.now()) {
+        if (token === undefined) {
+          throw new Error('MISSING_WORKER_TOKEN_FOR_DELAYED_JOB');
+        }
+
+        await job.moveToDelayed(scheduledAtMs, token);
+        throw new DelayedError();
+      }
+    }
 
     if (existing.status === PostTargetStatus.PUBLISHING) {
       const openAttempt = await this.publishingAttemptModel
@@ -221,11 +239,20 @@ export class PublishWorker implements OnModuleInit, OnModuleDestroy {
 
     try {
       await session.withTransaction(async () => {
+        const targetFilter: Record<string, unknown> = {
+          _id: postTargetId,
+          status: { $in: allowedStatuses },
+        };
+
+        // A scheduled target may only be claimed once its durable time has
+        // arrived. This closes the race where a worker reads an old schedule
+        // while a concurrent reschedule commits a new future time.
+        if (allowedStatuses.includes(PostTargetStatus.SCHEDULED)) {
+          targetFilter.scheduledAt = { $lte: new Date() };
+        }
+
         const target = await this.postTargetModel
-          .findOne({
-            _id: postTargetId,
-            status: { $in: allowedStatuses },
-          })
+          .findOne(targetFilter)
           .session(session);
 
         if (!target) {

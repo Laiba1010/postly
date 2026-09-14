@@ -52,15 +52,34 @@ export class QueueService implements OnModuleDestroy {
       if (!job) return this.scheduleJob(data, newScheduledAt);
 
       const state = await job.getState();
-      if (state !== 'delayed') {
+
+      // A reschedule replaces the derived queue representation. Waiting and
+      // delayed jobs are safe to remove here; the worker also re-checks the
+      // durable MongoDB scheduledAt before opening a publishing attempt, so a
+      // stale job cannot publish after a concurrent reschedule.
+      if (
+        state === 'delayed' ||
+        state === 'waiting' ||
+        state === 'prioritized' ||
+        state === 'failed' ||
+        state === 'completed' ||
+        state === 'waiting-children'
+      ) {
+        await job.remove();
+        return this.scheduleJob(data, newScheduledAt);
+      }
+
+      if (state === 'active') {
         this.logger.warn(
-          `Cannot reschedule jobId=${data.postTargetId}; job state=${state}`,
+          `Cannot replace active job during reschedule jobId=${data.postTargetId}; worker will re-check durable scheduledAt`,
         );
         return false;
       }
 
-      await job.changeDelay(this.computeDelayMs(newScheduledAt));
-      return true;
+      this.logger.warn(
+        `Cannot reschedule jobId=${data.postTargetId}; job state=${state}`,
+      );
+      return false;
     } catch (err) {
       this.logger.error(
         `Failed to reschedule jobId=${data.postTargetId}: ${err instanceof Error ? err.message : String(err)}`,

@@ -32,25 +32,48 @@ export class SessionsService {
     const rawToken = randomBytes(32).toString('hex');
     const hashedToken = this.hashToken(rawToken);
     const now = new Date().toISOString();
-    const versionRaw = await this.redisClient.get(this.versionKey(userId));
-    const parsedVersion = versionRaw ? Number.parseInt(versionRaw, 10) : 0;
-    const version = Number.isFinite(parsedVersion) ? parsedVersion : 0;
+    const versionKey = this.versionKey(userId);
 
-    const data: SessionData = {
-      userId,
-      createdAt: now,
-      lastUsedAt: now,
-      version,
-    };
+    /**
+     * Session creation and password-reset invalidation share the same Redis
+     * version key. WATCH makes the version read + session write atomic with
+     * respect to INCR on that key, so a reset cannot race with a new session
+     * and leave the new session carrying a stale version.
+     */
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      await this.redisClient.watch(versionKey);
 
-    await this.redisClient.set(
-      this.key(hashedToken),
-      JSON.stringify(data),
-      'EX',
-      this.ttlSeconds,
-    );
+      try {
+        const versionRaw = await this.redisClient.get(versionKey);
+        const parsedVersion = versionRaw ? Number.parseInt(versionRaw, 10) : 0;
+        const version = Number.isFinite(parsedVersion) ? parsedVersion : 0;
 
-    return rawToken;
+        const data: SessionData = {
+          userId,
+          createdAt: now,
+          lastUsedAt: now,
+          version,
+        };
+
+        const result = await this.redisClient
+          .multi()
+          .set(
+            this.key(hashedToken),
+            JSON.stringify(data),
+            'EX',
+            this.ttlSeconds,
+          )
+          .exec();
+
+        if (result !== null) {
+          return rawToken;
+        }
+      } finally {
+        await this.redisClient.unwatch();
+      }
+    }
+
+    throw new Error('SESSION_CREATION_CONFLICT');
   }
 
   async getSession(rawToken: string): Promise<SessionData | null> {

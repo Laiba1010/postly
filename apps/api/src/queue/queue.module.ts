@@ -15,6 +15,7 @@ import { QueueService } from './queue.service';
 import { PublishWorker } from './publish.worker';
 import { ReconciliationService } from './reconciliation.service';
 import { MockPlatformModule } from '../mock-platform/mock-platform.module';
+import { PostStatusAggregator } from '../posts/post-status-aggregator';
 
 @Global()
 @Module({
@@ -29,7 +30,12 @@ import { MockPlatformModule } from '../mock-platform/mock-platform.module';
     ]),
     MockPlatformModule,
   ],
-  providers: [QueueService, PublishWorker, ReconciliationService],
-  exports: [QueueService, MongooseModule],
+  providers: [
+    QueueService,
+    PublishWorker,
+    ReconciliationService,
+    PostStatusAggregator,
+  ],
+  exports: [QueueService, PostStatusAggregator, MongooseModule],
 })
 export class QueueModule {}

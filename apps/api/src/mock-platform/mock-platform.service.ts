@@ -2,7 +2,9 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import Redis from 'ioredis';
 
 import { REDIS_CLIENT } from '../redis/redis.module';
+
 import { PublishFailureReason } from './enums/publish-failure-reason.enum';
+
 import {
   MOCK_PLATFORM_IDEMPOTENCY_KEY_PREFIX,
   MOCK_PLATFORM_IDEMPOTENCY_TTL_MS,
@@ -11,24 +13,17 @@ import {
   MOCK_PLATFORM_RATE_LIMIT_RETRY_AFTER_MS,
   MOCK_PLATFORM_SCENARIO_WEIGHTS,
 } from './mock-platform.constants';
+
 import { MockPublishRequest, MockPublishResult } from './mock-platform.types';
 
-/**
- * Simulates an external social platform's publish endpoint.
- *
- * Scope boundary (Phase 9): this service resolves and returns the
- * immediate outcome of a single publish call — success or one of five
- * failure categories — and guarantees that outcome is idempotent per
- * postTargetId. It does not classify errors as retryable/permanent,
- * schedule retries, compute backoff, or persist anything itself. Those
- * are Phase 10 responsibilities; the caller (PublishWorker) owns
- * persisting whatever this service returns.
- */
 @Injectable()
 export class MockPlatformService {
   private readonly logger = new Logger(MockPlatformService.name);
 
-  constructor(@Inject(REDIS_CLIENT) private readonly redisClient: Redis) {}
+  constructor(
+    @Inject(REDIS_CLIENT)
+    private readonly redisClient: Redis,
+  ) {}
 
   async publish(request: MockPublishRequest): Promise<MockPublishResult> {
     this.assertValidRequest(request);
@@ -38,11 +33,23 @@ export class MockPlatformService {
       request.attemptNumber,
     );
 
+    /**
+     * Redis is acting as a simulation of a platform-side idempotency
+     * mechanism.
+     *
+     * The key is attempt scoped:
+     *
+     * postTargetId:attemptNumber
+     */
     const cached = await this.readCachedResult(cacheKey);
 
     if (cached) {
       this.logger.log(
-        `Idempotent replay postTargetId=${request.postTargetId} platform=${request.platform} outcome=${cached.outcome}`,
+        `Idempotent replay ` +
+          `postTargetId=${request.postTargetId} ` +
+          `platform=${request.platform} ` +
+          `attemptNumber=${request.attemptNumber} ` +
+          `outcome=${cached.outcome}`,
       );
 
       return cached;
@@ -50,28 +57,41 @@ export class MockPlatformService {
 
     await this.simulateNetworkLatency();
 
+    /**
+     * The result is generated before the atomic NX write.
+     *
+     * Only one concurrent caller can claim the idempotency key.
+     */
     const resolved = this.resolveScenario();
 
     const claimed = await this.claimCacheSlot(cacheKey, resolved);
 
     if (!claimed) {
-      // Another concurrent call for the same idempotency key won the
-      // race between our cache-miss read and our write. A real platform
-      // would return that caller's original response rather than
-      // executing the publish twice — replay it instead of our own.
       const winner = await this.readCachedResult(cacheKey);
 
       if (winner) {
         this.logger.log(
-          `Idempotency race lost postTargetId=${request.postTargetId} platform=${request.platform}, replaying winner outcome=${winner.outcome}`,
+          `Idempotency race lost ` +
+            `postTargetId=${request.postTargetId} ` +
+            `attemptNumber=${request.attemptNumber} ` +
+            `outcome=${winner.outcome}`,
         );
 
         return winner;
       }
 
-      // Extremely unlikely: the winning entry expired between our failed
-      // claim and this read. Fall back to our own freshly-resolved
-      // result rather than leaving the caller without one.
+      /**
+       * If the winner disappeared between SET NX and GET, retry the
+       * read once. We deliberately do not execute another external
+       * operation because this method represents the platform boundary.
+       */
+      const secondRead = await this.readCachedResult(cacheKey);
+
+      if (secondRead) {
+        return secondRead;
+      }
+
+      throw new Error('MOCK_PLATFORM_IDEMPOTENCY_RESULT_UNAVAILABLE');
     }
 
     this.logResolution(request, resolved);
@@ -95,6 +115,12 @@ export class MockPlatformService {
     if (!request.platform) {
       throw new Error('MockPlatformService.publish requires a platform');
     }
+
+    if (!Number.isInteger(request.attemptNumber) || request.attemptNumber < 1) {
+      throw new Error(
+        'MockPlatformService.publish requires a positive integer attemptNumber',
+      );
+    }
   }
 
   private logResolution(
@@ -103,19 +129,33 @@ export class MockPlatformService {
   ): void {
     if (result.outcome === 'SUCCESS') {
       this.logger.log(
-        `Publish resolved postTargetId=${request.postTargetId} platform=${request.platform} outcome=SUCCESS`,
+        `Publish resolved ` +
+          `postTargetId=${request.postTargetId} ` +
+          `platform=${request.platform} ` +
+          `attemptNumber=${request.attemptNumber} ` +
+          `outcome=SUCCESS`,
       );
+
       return;
     }
 
     this.logger.warn(
-      `Publish resolved postTargetId=${request.postTargetId} platform=${request.platform} outcome=FAILURE errorCode=${result.reason}`,
+      `Publish resolved ` +
+        `postTargetId=${request.postTargetId} ` +
+        `platform=${request.platform} ` +
+        `attemptNumber=${request.attemptNumber} ` +
+        `outcome=FAILURE ` +
+        `errorCode=${result.reason}`,
     );
   }
 
   private buildCacheKey(idempotencyKey: string, attemptNumber: number): string {
-    return `${MOCK_PLATFORM_IDEMPOTENCY_KEY_PREFIX}${idempotencyKey}:${attemptNumber}`;
+    return (
+      `${MOCK_PLATFORM_IDEMPOTENCY_KEY_PREFIX}` +
+      `${idempotencyKey}:${attemptNumber}`
+    );
   }
+
   private async readCachedResult(
     cacheKey: string,
   ): Promise<MockPublishResult | null> {
@@ -126,16 +166,20 @@ export class MockPlatformService {
     }
 
     try {
-      return JSON.parse(raw) as MockPublishResult;
+      const parsed = JSON.parse(raw) as MockPublishResult;
+
+      if (!parsed || typeof parsed !== 'object' || !('outcome' in parsed)) {
+        throw new Error('Invalid cached result shape');
+      }
+
+      return parsed;
     } catch (err) {
       this.logger.error(
-        `Corrupted mock-platform cache entry key=${cacheKey}, deleting so idempotency can recover: ${
-          (err as Error).message
-        }`,
+        `Corrupted mock platform cache ` +
+          `key=${cacheKey}: ` +
+          `${this.getErrorMessage(err)}`,
       );
 
-      // Actively remove it rather than leaving a poisoned key that
-      // permanently blocks NX claims for the rest of its TTL.
       await this.redisClient.del(cacheKey);
 
       return null;
@@ -159,9 +203,10 @@ export class MockPlatformService {
 
   private async simulateNetworkLatency(): Promise<void> {
     const spread = MOCK_PLATFORM_MAX_LATENCY_MS - MOCK_PLATFORM_MIN_LATENCY_MS;
+
     const delay = MOCK_PLATFORM_MIN_LATENCY_MS + Math.random() * spread;
 
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    await new Promise<void>((resolve) => setTimeout(resolve, delay));
   }
 
   private resolveScenario(): MockPublishResult {
@@ -169,6 +214,10 @@ export class MockPlatformService {
       (sum, entry) => sum + entry.weight,
       0,
     );
+
+    if (!Number.isFinite(totalWeight) || totalWeight <= 0) {
+      throw new Error('MOCK_PLATFORM_SCENARIO_WEIGHTS_INVALID');
+    }
 
     let roll = Math.random() * totalWeight;
 
@@ -180,16 +229,18 @@ export class MockPlatformService {
       }
     }
 
-    // Floating-point fallback: in practice the loop above always returns
-    // before this line, but a scenario must never go unresolved.
-    return { outcome: 'SUCCESS' };
+    return {
+      outcome: 'SUCCESS',
+    };
   }
 
   private buildResult(
     outcome: 'SUCCESS' | PublishFailureReason,
   ): MockPublishResult {
     if (outcome === 'SUCCESS') {
-      return { outcome: 'SUCCESS' };
+      return {
+        outcome: 'SUCCESS',
+      };
     }
 
     switch (outcome) {
@@ -219,8 +270,7 @@ export class MockPlatformService {
         return {
           outcome: 'FAILURE',
           reason: PublishFailureReason.INVALID_MEDIA,
-          message:
-            'Platform rejected the attached media (unsupported format or corrupt file).',
+          message: 'Platform rejected the attached media.',
         };
 
       case PublishFailureReason.AUTH_ERROR:
@@ -233,10 +283,19 @@ export class MockPlatformService {
 
       default: {
         const exhaustiveCheck: never = outcome;
+
         throw new Error(
           `Unhandled mock platform outcome: ${String(exhaustiveCheck)}`,
         );
       }
     }
+  }
+
+  private getErrorMessage(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+
+    return String(error);
   }
 }

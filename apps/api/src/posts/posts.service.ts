@@ -8,6 +8,7 @@ import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Connection, Model, Types } from 'mongoose';
 
 import { QueueService } from '../queue/queue.service';
+import { PostStatusAggregator } from './post-status-aggregator';
 
 import { Post, PostDocument } from './schemas/post.schema';
 import { PostTarget, PostTargetDocument } from './schemas/post-target.schema';
@@ -40,6 +41,9 @@ export interface PostTargetSummary {
   socialConnectionId: string;
   status: PostTargetStatus;
   scheduledAt: Date;
+  retryCount: number;
+  nextRetryAt: Date | null;
+  externalPostId: string | null;
 }
 
 export interface PostSummary {
@@ -71,6 +75,7 @@ export class PostsService {
     @InjectModel(Media.name)
     private readonly mediaModel: Model<MediaDocument>,
     private readonly queueService: QueueService,
+    private readonly postStatusAggregator: PostStatusAggregator,
   ) {}
 
   private toObjectId(value: string, fieldName: string): Types.ObjectId {
@@ -681,77 +686,207 @@ export class PostsService {
     postId: string,
   ): Promise<PostSummary> {
     const workspaceObjectId = this.toObjectId(workspaceId, 'workspaceId');
-
     const postObjectId = this.toObjectId(postId, 'postId');
 
-    const post = await this.postModel.findOne({
-      _id: postObjectId,
-      workspaceId: workspaceObjectId,
-    });
-
-    if (!post) {
-      throw new NotFoundException({
-        code: 'POST_NOT_FOUND',
-        message: 'Post not found',
-      });
-    }
-
-    if (post.status !== PostStatus.SCHEDULED) {
-      throw new BadRequestException({
-        code: 'INVALID_STATE_TRANSITION',
-        message: 'Only scheduled posts can be cancelled',
-      });
-    }
-
-    const targetsToCancel = await this.postTargetModel.find({
-      postId: post._id,
-      workspaceId: workspaceObjectId,
-      status: PostTargetStatus.SCHEDULED,
-    });
-
     const session = await this.connection.startSession();
+    const targetIdsToCancel: string[] = [];
+    let cancelledPost: PostDocument | null = null;
 
     try {
       await session.withTransaction(async () => {
-        await this.postTargetModel.updateMany(
+        const post = await this.postModel
+          .findOne({ _id: postObjectId, workspaceId: workspaceObjectId })
+          .session(session);
+
+        if (!post) {
+          throw new NotFoundException({
+            code: 'POST_NOT_FOUND',
+            message: 'Post not found',
+          });
+        }
+
+        if (
+          post.status !== PostStatus.SCHEDULED &&
+          post.status !== PostStatus.PUBLISHING
+        ) {
+          throw new BadRequestException({
+            code: 'INVALID_STATE_TRANSITION',
+            message:
+              'Only scheduled posts with pending targets can be cancelled',
+          });
+        }
+
+        const targets = await this.postTargetModel
+          .find({
+            postId: post._id,
+            workspaceId: workspaceObjectId,
+            status: {
+              $in: [PostTargetStatus.SCHEDULED, PostTargetStatus.RETRYING],
+            },
+          })
+          .select('_id')
+          .session(session)
+          .lean()
+          .exec();
+
+        if (post.status === PostStatus.PUBLISHING && targets.length === 0) {
+          // Active PUBLISHING cancellation remains deliberately out of scope.
+          // We cannot safely interrupt an already-running external publish in
+          // this MVP without introducing worker cancellation semantics.
+          throw new BadRequestException({
+            code: 'INVALID_STATE_TRANSITION',
+            message:
+              'Posts with only actively publishing targets cannot be cancelled',
+          });
+        }
+
+        const updateResult = await this.postTargetModel.updateMany(
           {
             postId: post._id,
             workspaceId: workspaceObjectId,
-            status: PostTargetStatus.SCHEDULED,
-          },
-          {
-            $set: {
-              status: PostTargetStatus.CANCELLED,
+            status: {
+              $in: [PostTargetStatus.SCHEDULED, PostTargetStatus.RETRYING],
             },
           },
-          {
-            session,
-          },
+          { $set: { status: PostTargetStatus.CANCELLED, nextRetryAt: null } },
+          { session },
         );
 
-        post.status = PostStatus.CANCELLED;
+        if (updateResult.modifiedCount > 0) {
+          targetIdsToCancel.push(
+            ...targets.map((target) => target._id.toString()),
+          );
+        }
 
+        post.status = PostStatus.CANCELLED;
         await post.save({ session });
+        cancelledPost = post;
       });
     } finally {
       await session.endSession();
     }
 
     await Promise.all(
-      targetsToCancel.map(async (target) => {
-        const queueRemoved = await this.queueService.removeJob(
-          target._id.toString(),
-        );
-
+      targetIdsToCancel.map(async (targetId) => {
+        const queueRemoved = await this.queueService.removeJob(targetId);
         if (!queueRemoved) {
           console.error(
-            `Queue synchronization failed while cancelling post target ${target._id.toString()}`,
+            `Queue synchronization failed while cancelling post target ${targetId}`,
           );
         }
       }),
     );
 
-    return this.toSummary(post);
+    return this.toSummary(cancelledPost!);
+  }
+
+  async retryTarget(
+    workspaceId: string,
+    postId: string,
+    targetId: string,
+  ): Promise<PostTargetSummary> {
+    const workspaceObjectId = this.toObjectId(workspaceId, 'workspaceId');
+    const postObjectId = this.toObjectId(postId, 'postId');
+    const targetObjectId = this.toObjectId(targetId, 'targetId');
+
+    const session = await this.connection.startSession();
+    let target: PostTargetDocument | null = null;
+
+    try {
+      await session.withTransaction(async () => {
+        const post = await this.postModel
+          .findOne({ _id: postObjectId, workspaceId: workspaceObjectId })
+          .select('_id status')
+          .session(session)
+          .lean()
+          .exec();
+
+        if (!post) {
+          throw new NotFoundException({
+            code: 'POST_NOT_FOUND',
+            message: 'Post not found',
+          });
+        }
+
+        if (post.status === PostStatus.CANCELLED) {
+          throw new BadRequestException({
+            code: 'INVALID_STATE_TRANSITION',
+            message: 'Cancelled posts cannot be retried',
+          });
+        }
+
+        target = await this.postTargetModel.findOneAndUpdate(
+          {
+            _id: targetObjectId,
+            postId: postObjectId,
+            workspaceId: workspaceObjectId,
+            status: PostTargetStatus.FAILED,
+          },
+          {
+            $set: {
+              status: PostTargetStatus.RETRYING,
+              nextRetryAt: null,
+            },
+          },
+          { new: true, session },
+        );
+
+        if (!target) {
+          const existing = await this.postTargetModel
+            .findOne({
+              _id: targetObjectId,
+              postId: postObjectId,
+              workspaceId: workspaceObjectId,
+            })
+            .session(session)
+            .lean()
+            .exec();
+
+          if (!existing) {
+            throw new NotFoundException({
+              code: 'TARGET_NOT_FOUND',
+              message: 'Post target not found',
+            });
+          }
+
+          throw new BadRequestException({
+            code: 'TARGET_NOT_RETRYABLE',
+            message: 'Only failed targets can be manually retried',
+          });
+        }
+
+        await this.postStatusAggregator.recomputePostStatus(
+          postObjectId,
+          session,
+        );
+      });
+    } finally {
+      await session.endSession();
+    }
+
+    const targetDocument = target!;
+    const queueSynced = await this.queueService.retryJob({
+      postTargetId: targetDocument._id.toString(),
+      workspaceId,
+      postId,
+      platform: targetDocument.platform,
+    });
+
+    if (!queueSynced) {
+      // MongoDB already contains the durable RETRYING state. Reconciliation
+      // will reconstruct the derived BullMQ job if necessary.
+    }
+
+    return {
+      id: targetDocument._id.toString(),
+      platform: targetDocument.platform,
+      socialConnectionId: targetDocument.socialConnectionId.toString(),
+      status: targetDocument.status,
+      scheduledAt: targetDocument.scheduledAt,
+      retryCount: targetDocument.retryCount ?? 0,
+      nextRetryAt: targetDocument.nextRetryAt,
+      externalPostId: targetDocument.externalPostId,
+    };
   }
 
   async listTargetsForPost(
@@ -773,6 +908,9 @@ export class PostsService {
       socialConnectionId: target.socialConnectionId.toString(),
       status: target.status,
       scheduledAt: target.scheduledAt,
+      retryCount: target.retryCount ?? 0,
+      nextRetryAt: target.nextRetryAt,
+      externalPostId: target.externalPostId,
     }));
   }
 

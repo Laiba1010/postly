@@ -49,30 +49,33 @@ export class PostTarget {
 
   @Prop({ required: true })
   scheduledAt: Date;
+
+  /** Number of automatic retries already scheduled for this target. */
+  @Prop({ type: Number, required: true, default: 0, min: 0 })
+  retryCount: number;
+
+  /** When the next automatic retry is due. Null outside RETRYING. */
+  @Prop({ type: Date, default: null })
+  nextRetryAt: Date | null;
+
+  /** External platform identifier returned after a successful publish. */
+  @Prop({ type: String, default: null })
+  externalPostId: string | null;
 }
 
 export const PostTargetSchema = SchemaFactory.createForClass(PostTarget);
 
 /**
  * Prevent duplicate targets for the same social connection.
- *
  * This is a database invariant, not merely an application-level check.
  */
 PostTargetSchema.index({ postId: 1, socialConnectionId: 1 }, { unique: true });
 
-/**
- * Supports:
- * listTargetsForPost(workspaceId, postId)
- */
-PostTargetSchema.index({
-  workspaceId: 1,
-  postId: 1,
-});
+/** Supports listTargetsForPost(workspaceId, postId). */
+PostTargetSchema.index({ workspaceId: 1, postId: 1 });
 
-/**
- * Useful for Phase 8 worker queries.
- */
-PostTargetSchema.index({
-  workspaceId: 1,
-  status: 1,
-});
+/** Supports worker/reconciliation status queries. */
+PostTargetSchema.index({ workspaceId: 1, status: 1 });
+
+/** Supports retry/recovery queries scoped to a post target lifecycle. */
+PostTargetSchema.index({ postId: 1, status: 1 });

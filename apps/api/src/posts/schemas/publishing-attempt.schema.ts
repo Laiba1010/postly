@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument, Types } from 'mongoose';
 import { PublishingAttemptStatus } from '../enums/publishing-attempt-status.enum';
+import { PublishFailureReason } from '../../mock-platform/enums/publish-failure-reason.enum';
 
 export type PublishingAttemptDocument = HydratedDocument<PublishingAttempt> & {
   createdAt: Date;
@@ -8,7 +9,12 @@ export type PublishingAttemptDocument = HydratedDocument<PublishingAttempt> & {
 
 @Schema({ timestamps: { createdAt: true, updatedAt: false } })
 export class PublishingAttempt {
-  @Prop({ type: Types.ObjectId, ref: 'PostTarget', required: true })
+  @Prop({
+    type: Types.ObjectId,
+    ref: 'PostTarget',
+    required: true,
+    index: true,
+  })
   postTargetId: Types.ObjectId;
 
   @Prop({ required: true, min: 1 })
@@ -16,6 +22,9 @@ export class PublishingAttempt {
 
   @Prop({ type: String, enum: PublishingAttemptStatus, required: true })
   status: PublishingAttemptStatus;
+
+  @Prop({ type: String, enum: PublishFailureReason, default: null })
+  errorCode: PublishFailureReason | null;
 
   @Prop({ default: null })
   errorMessage: string | null;
@@ -30,9 +39,10 @@ export class PublishingAttempt {
 export const PublishingAttemptSchema =
   SchemaFactory.createForClass(PublishingAttempt);
 
-// Primary access pattern: full attempt history for one target, in order.
-// Database invariant: one attempt number may exist only once per target.
 PublishingAttemptSchema.index(
   { postTargetId: 1, attemptNumber: 1 },
   { unique: true },
 );
+
+/** Supports recovery of attempts left open by a worker crash. */
+PublishingAttemptSchema.index({ postTargetId: 1, status: 1 });

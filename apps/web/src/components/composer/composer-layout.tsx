@@ -18,6 +18,7 @@ import { cn } from "@/lib/utils";
 
 interface ComposerLayoutProps {
   workspaceId: string | null;
+  canManage?: boolean;
   composer: {
     form: UseFormReturn<ComposerFormValues>;
     isLoadingDraft: boolean;
@@ -28,11 +29,16 @@ interface ComposerLayoutProps {
   };
 }
 
-export function ComposerLayout({ workspaceId, composer }: ComposerLayoutProps) {
+export function ComposerLayout({
+  workspaceId,
+  canManage = true,
+  composer,
+}: ComposerLayoutProps) {
   const { form, isLoadingDraft, save, isSaving, saveError } = composer;
   const postStatus = composer.existingDraft?.status;
 
-  const isEditable = !composer.existingDraft || postStatus === "DRAFT";
+  const isEditable =
+    canManage && (!composer.existingDraft || postStatus === "DRAFT");
   const [savedMessage, setSavedMessage] = useState(false);
   const { data: connections, isLoading: isLoadingConnections } =
     useSocialConnections(workspaceId);

@@ -15,6 +15,9 @@ export function useSchedulePost(workspaceId: string | null) {
     onSuccess: ({ post }) => {
       queryClient.invalidateQueries({ queryKey: ["posts", workspaceId] });
       queryClient.setQueryData(["post", workspaceId, post.id], post);
+      queryClient.invalidateQueries({
+        queryKey: ["post-status", workspaceId, post.id],
+      });
     },
   });
 }
@@ -28,6 +31,9 @@ export function useReschedulePost(workspaceId: string | null) {
     onSuccess: ({ post }) => {
       queryClient.invalidateQueries({ queryKey: ["posts", workspaceId] });
       queryClient.setQueryData(["post", workspaceId, post.id], post);
+      queryClient.invalidateQueries({
+        queryKey: ["post-status", workspaceId, post.id],
+      });
     },
   });
 }
@@ -40,6 +46,9 @@ export function useCancelSchedule(workspaceId: string | null) {
     onSuccess: ({ post }) => {
       queryClient.invalidateQueries({ queryKey: ["posts", workspaceId] });
       queryClient.setQueryData(["post", workspaceId, post.id], post);
+      queryClient.invalidateQueries({
+        queryKey: ["post-status", workspaceId, post.id],
+      });
     },
   });
 }

@@ -10,7 +10,15 @@ export type PostStatus =
   | "FAILED"
   | "CANCELLED";
 
-export type PostTargetStatus = "SCHEDULED" | "CANCELLED";
+export type PostTargetStatus =
+  | "SCHEDULED"
+  | "PUBLISHING"
+  | "RETRYING"
+  | "PUBLISHED"
+  | "FAILED"
+  | "CANCELLED";
+
+export type PublishingAttemptStatus = "PUBLISHING" | "SUCCESS" | "FAILED";
 
 export interface PostDestination {
   provider: SocialProvider;
@@ -36,6 +44,41 @@ export interface PostTarget {
   socialConnectionId: string;
   status: PostTargetStatus;
   scheduledAt: string;
+  retryCount?: number;
+  nextRetryAt?: string | null;
+  externalPostId?: string | null;
+}
+
+export interface PublishingAttempt {
+  number: number;
+  status: PublishingAttemptStatus;
+  startedAt: string;
+  completedAt: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+}
+
+export interface PostStatusTarget {
+  id: string;
+  platform: SocialProvider;
+  socialConnectionId: string;
+  accountName: string;
+  status: PostTargetStatus;
+  scheduledAt: string;
+  externalPostId: string | null;
+  attempt: PublishingAttempt | null;
+  retry: {
+    count: number;
+    maxAttempts: number;
+    nextRetryAt: string | null;
+  };
+}
+
+export interface PostStatusResponse {
+  postId: string;
+  status: PostStatus;
+  updatedAt: string;
+  targets: PostStatusTarget[];
 }
 
 export interface SaveDraftInput {
@@ -120,5 +163,12 @@ export function cancelSchedule(workspaceId: string, postId: string) {
 export function listPostTargets(workspaceId: string, postId: string) {
   return apiClient.get<{ targets: PostTarget[] }>(
     `/api/workspaces/${workspaceId}/posts/${postId}/targets`,
+  );
+}
+
+
+export function getPostStatus(workspaceId: string, postId: string) {
+  return apiClient.get<PostStatusResponse>(
+    `/api/workspaces/${workspaceId}/posts/${postId}/status`,
   );
 }

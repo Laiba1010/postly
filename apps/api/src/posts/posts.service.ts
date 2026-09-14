@@ -10,9 +10,16 @@ import { ClientSession, Connection, Model, Types } from 'mongoose';
 
 import { QueueService } from '../queue/queue.service';
 import { PostStatusAggregator } from './post-status-aggregator';
+import { MAX_PUBLISH_ATTEMPTS } from '../queue/retry-policy';
+import type { PostStatusResponse } from './dto/post-status-response.dto';
 
 import { Post, PostDocument } from './schemas/post.schema';
 import { PostTarget, PostTargetDocument } from './schemas/post-target.schema';
+import {
+  PublishingAttempt,
+  PublishingAttemptDocument,
+} from './schemas/publishing-attempt.schema';
+import { PublishingAttemptStatus } from './enums/publishing-attempt-status.enum';
 
 import { PostStatus } from './enums/post-status.enum';
 import { PostTargetStatus } from './enums/post-target-status.enum';
@@ -73,6 +80,8 @@ export class PostsService {
     private readonly postModel: Model<PostDocument>,
     @InjectModel(PostTarget.name)
     private readonly postTargetModel: Model<PostTargetDocument>,
+    @InjectModel(PublishingAttempt.name)
+    private readonly publishingAttemptModel: Model<PublishingAttemptDocument>,
     @InjectModel(SocialConnection.name)
     private readonly socialConnectionModel: Model<SocialConnectionDocument>,
     @InjectModel(Media.name)
@@ -977,6 +986,99 @@ export class PostsService {
       retryCount: targetDocument.retryCount ?? 0,
       nextRetryAt: targetDocument.nextRetryAt,
       externalPostId: targetDocument.externalPostId,
+    };
+  }
+
+  async getPostStatus(
+    workspaceId: string,
+    postId: string,
+  ): Promise<PostStatusResponse> {
+    const workspaceObjectId = this.toObjectId(workspaceId, 'workspaceId');
+    const postObjectId = this.toObjectId(postId, 'postId');
+
+    const post = await this.postModel
+      .findOne({ _id: postObjectId, workspaceId: workspaceObjectId })
+      .select('_id status updatedAt destinations')
+      .lean()
+      .exec();
+
+    if (!post) {
+      throw new NotFoundException({
+        code: 'POST_NOT_FOUND',
+        message: 'Post not found',
+      });
+    }
+
+    const targets = await this.postTargetModel
+      .find({ postId: postObjectId, workspaceId: workspaceObjectId })
+      .select(
+        '_id platform socialConnectionId status scheduledAt retryCount nextRetryAt externalPostId',
+      )
+      .lean()
+      .exec();
+
+    const targetIds = targets.map((target) => target._id);
+    const attempts = targetIds.length
+      ? await this.publishingAttemptModel
+          .find({ postTargetId: { $in: targetIds } })
+          .select(
+            'postTargetId attemptNumber status startedAt completedAt errorCode errorMessage',
+          )
+          .sort({ attemptNumber: -1 })
+          .lean()
+          .exec()
+      : [];
+
+    const latestAttemptByTarget = new Map<string, (typeof attempts)[number]>();
+
+    for (const attempt of attempts) {
+      const key = attempt.postTargetId.toString();
+      if (!latestAttemptByTarget.has(key)) {
+        latestAttemptByTarget.set(key, attempt);
+      }
+    }
+
+    const accountNames = new Map(
+      post.destinations.map((destination) => [
+        destination.socialConnectionId.toString(),
+        destination.accountName,
+      ]),
+    );
+
+    return {
+      postId: post._id.toString(),
+      status: post.status,
+      updatedAt: post.updatedAt,
+      targets: targets.map((target) => {
+        const attempt = latestAttemptByTarget.get(target._id.toString());
+
+        return {
+          id: target._id.toString(),
+          platform: target.platform,
+          socialConnectionId: target.socialConnectionId.toString(),
+          accountName:
+            accountNames.get(target.socialConnectionId.toString()) ??
+            'Connected account',
+          status: target.status,
+          scheduledAt: target.scheduledAt,
+          externalPostId: target.externalPostId ?? null,
+          attempt: attempt
+            ? {
+                number: attempt.attemptNumber,
+                status: attempt.status,
+                startedAt: attempt.startedAt,
+                completedAt: attempt.completedAt ?? null,
+                errorCode: attempt.errorCode ?? null,
+                errorMessage: attempt.errorMessage ?? null,
+              }
+            : null,
+          retry: {
+            count: target.retryCount ?? 0,
+            maxAttempts: MAX_PUBLISH_ATTEMPTS,
+            nextRetryAt: target.nextRetryAt ?? null,
+          },
+        };
+      }),
     };
   }
 

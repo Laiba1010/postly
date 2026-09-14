@@ -228,4 +228,13 @@ export class PostsController {
 
     return { targets };
   }
+  @Get(':postId/status')
+  @Roles(Role.OWNER, Role.EDITOR, Role.VIEWER)
+  async status(
+    @Param('workspaceId') workspaceId: string,
+    @Param('postId') postId: string,
+  ) {
+    const status = await this.postsService.getPostStatus(workspaceId, postId);
+    return status;
+  }
 }

@@ -4,6 +4,10 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { Post, PostSchema } from './schemas/post.schema';
 
 import { PostTarget, PostTargetSchema } from './schemas/post-target.schema';
+import {
+  PublishingAttempt,
+  PublishingAttemptSchema,
+} from './schemas/publishing-attempt.schema';
 
 import {
   SocialConnection,
@@ -30,6 +34,10 @@ import { QueueModule } from '../queue/queue.module';
       {
         name: PostTarget.name,
         schema: PostTargetSchema,
+      },
+      {
+        name: PublishingAttempt.name,
+        schema: PublishingAttemptSchema,
       },
       {
         name: SocialConnection.name,

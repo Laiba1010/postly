@@ -1,4 +1,5 @@
 import { apiClient } from "./client";
+export type { SocialProvider } from "./social-connections";
 import type { SocialProvider } from "./social-connections";
 
 export type PostStatus =
@@ -74,6 +75,42 @@ export interface PostStatusTarget {
   };
 }
 
+export interface PostListTarget {
+  id: string;
+  platform: SocialProvider;
+  socialConnectionId: string;
+  accountName: string;
+  status: PostTargetStatus;
+  scheduledAt: string;
+  retryCount: number;
+  nextRetryAt: string | null;
+}
+
+export interface PostListItem extends Post {
+  targets: PostListTarget[];
+}
+export interface PostsPagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+export interface ListPostsParams {
+  status?: PostStatus;
+  platform?: SocialProvider;
+  search?: string;
+  page?: number;
+  limit?: number;
+  sortBy?: "createdAt" | "updatedAt" | "scheduledAt";
+  sortDir?: "asc" | "desc";
+  createdFrom?: string;
+  createdTo?: string;
+}
+export interface ListPostsResponse {
+  posts: PostListItem[];
+  pagination: PostsPagination;
+}
+
 export interface PostStatusResponse {
   postId: string;
   status: PostStatus;
@@ -120,9 +157,35 @@ export function updateDraft(
   );
 }
 
+export function listPosts(workspaceId: string, params: ListPostsParams = {}) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== null && value !== "")
+      query.set(key, String(value));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiClient.get<ListPostsResponse>(
+    `/api/workspaces/${workspaceId}/posts${suffix}`,
+  );
+}
+
 export function listDrafts(workspaceId: string) {
-  return apiClient.get<{ posts: Post[] }>(
-    `/api/workspaces/${workspaceId}/posts`,
+  return listPosts(workspaceId, { limit: 50 });
+}
+
+export function duplicateDraft(workspaceId: string, postId: string) {
+  return apiClient.post<{ post: Post }>(
+    `/api/workspaces/${workspaceId}/posts/${postId}/duplicate`,
+  );
+}
+
+export function retryTarget(
+  workspaceId: string,
+  postId: string,
+  targetId: string,
+) {
+  return apiClient.post<{ target: PostTarget }>(
+    `/api/workspaces/${workspaceId}/posts/${postId}/targets/${targetId}/retry`,
   );
 }
 
@@ -165,7 +228,6 @@ export function listPostTargets(workspaceId: string, postId: string) {
     `/api/workspaces/${workspaceId}/posts/${postId}/targets`,
   );
 }
-
 
 export function getPostStatus(workspaceId: string, postId: string) {
   return apiClient.get<PostStatusResponse>(

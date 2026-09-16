@@ -12,6 +12,11 @@ import { QueueService } from '../queue/queue.service';
 import { PostStatusAggregator } from './post-status-aggregator';
 import { MAX_PUBLISH_ATTEMPTS } from '../queue/retry-policy';
 import type { PostStatusResponse } from './dto/post-status-response.dto';
+import {
+  ListPostsQueryDto,
+  PostListSortBy,
+  PostListSortDir,
+} from './dto/list-posts-query.dto';
 
 import { Post, PostDocument } from './schemas/post.schema';
 import { PostTarget, PostTargetDocument } from './schemas/post-target.schema';
@@ -317,13 +322,142 @@ export class PostsService {
     return this.toSummary(post);
   }
 
-  async listDrafts(workspaceId: string): Promise<PostSummary[]> {
-    const posts = await this.postModel
-      .find({ workspaceId: new Types.ObjectId(workspaceId) })
-      .sort({ updatedAt: -1 })
-      .exec();
+  async listPosts(
+    workspaceId: string,
+    query: ListPostsQueryDto,
+  ): Promise<{
+    posts: (PostSummary & {
+      targets: {
+        id: string;
+        platform: string;
+        socialConnectionId: string;
+        accountName: string;
+        status: PostTargetStatus;
+        scheduledAt: Date;
+        retryCount: number;
+        nextRetryAt: Date | null;
+      }[];
+    })[];
+    pagination: {
+      page: number;
+      limit: number;
+      total: number;
+      totalPages: number;
+    };
+  }> {
+    const workspaceObjectId = this.toObjectId(workspaceId, 'workspaceId');
+    const page = Math.max(1, Number(query.page) || 1);
+    const limit = Math.min(50, Math.max(1, Number(query.limit) || 20));
+    const filter: Record<string, unknown> = { workspaceId: workspaceObjectId };
 
-    return posts.map((p) => this.toSummary(p));
+    if (query.status) filter.status = query.status;
+    if (query.platform)
+      filter.destinations = { $elemMatch: { provider: query.platform } };
+
+    const search = query.search?.trim();
+    if (search) {
+      const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.content = { $regex: escaped, $options: 'i' };
+    }
+
+    if (query.createdFrom || query.createdTo) {
+      const createdAt: Record<string, Date> = {};
+      if (query.createdFrom) {
+        const from = new Date(query.createdFrom);
+        if (Number.isNaN(from.getTime()))
+          throw new BadRequestException({
+            code: 'INVALID_CREATED_FROM',
+            message: 'createdFrom must be a valid ISO date',
+          });
+        createdAt.$gte = from;
+      }
+      if (query.createdTo) {
+        const to = new Date(query.createdTo);
+        if (Number.isNaN(to.getTime()))
+          throw new BadRequestException({
+            code: 'INVALID_CREATED_TO',
+            message: 'createdTo must be a valid ISO date',
+          });
+        createdAt.$lte = to;
+      }
+      if (createdAt.$gte && createdAt.$lte && createdAt.$gte > createdAt.$lte) {
+        throw new BadRequestException({
+          code: 'INVALID_CREATED_RANGE',
+          message: 'createdFrom must not be later than createdTo',
+        });
+      }
+      filter.createdAt = createdAt;
+    }
+
+    const sortField = query.sortBy ?? PostListSortBy.UPDATED_AT;
+    const sortDirection = query.sortDir === PostListSortDir.ASC ? 1 : -1;
+    const [posts, total] = await Promise.all([
+      this.postModel
+        .find(filter)
+        .sort({ [sortField]: sortDirection, _id: sortDirection })
+        .skip((page - 1) * limit)
+        .limit(limit)
+        .exec(),
+      this.postModel.countDocuments(filter),
+    ]);
+
+    const postIds = posts.map((post) => post._id);
+    const targets = postIds.length
+      ? await this.postTargetModel
+          .find({ workspaceId: workspaceObjectId, postId: { $in: postIds } })
+          .select(
+            '_id postId platform socialConnectionId status scheduledAt retryCount nextRetryAt',
+          )
+          .lean()
+          .exec()
+      : [];
+
+    const targetsByPost = new Map<string, typeof targets>();
+    for (const target of targets) {
+      const key = target.postId.toString();
+      const list = targetsByPost.get(key);
+      if (list) list.push(target);
+      else targetsByPost.set(key, [target]);
+    }
+
+    return {
+      posts: posts.map((post) => {
+        const destinationNames = new Map(
+          post.destinations.map((d) => [
+            d.socialConnectionId.toString(),
+            d.accountName,
+          ]),
+        );
+        return {
+          ...this.toSummary(post),
+          targets: (targetsByPost.get(post._id.toString()) ?? []).map(
+            (target) => ({
+              id: target._id.toString(),
+              platform: target.platform,
+              socialConnectionId: target.socialConnectionId.toString(),
+              accountName:
+                destinationNames.get(target.socialConnectionId.toString()) ??
+                'Connected account',
+              status: target.status,
+              scheduledAt: target.scheduledAt,
+              retryCount: target.retryCount ?? 0,
+              nextRetryAt: target.nextRetryAt ?? null,
+            }),
+          ),
+        };
+      }),
+      pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  async listDrafts(workspaceId: string): Promise<PostSummary[]> {
+    const result = await this.listPosts(workspaceId, {
+      page: 1,
+      limit: 50,
+      sortBy: PostListSortBy.UPDATED_AT,
+      sortDir: PostListSortDir.DESC,
+    } as ListPostsQueryDto);
+    return result.posts.map(({ targets: _targets, ...post }) => post);
   }
 
   async duplicateDraft(

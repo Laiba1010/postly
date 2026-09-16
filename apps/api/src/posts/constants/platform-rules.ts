@@ -1,6 +1,8 @@
-import { PLATFORM_RULES, type SocialProvider } from '@postly/shared';
+import { PLATFORM_RULES } from '@postly/shared';
 
 export { PLATFORM_RULES };
+
+export type SocialProvider = keyof typeof PLATFORM_RULES;
 
 export interface PlatformValidationError {
   provider: SocialProvider;
@@ -36,11 +38,11 @@ export function validateAgainstPlatformRules(
       });
     }
 
-    if (mediaCount > rule.maxMediaCount) {
+    if (mediaCount > rule.maxMediaItems) {
       errors.push({
         provider,
         reason: 'TOO_MANY_MEDIA_ITEMS',
-        message: `${provider} allows a maximum of ${rule.maxMediaCount} media items`,
+        message: `${provider} allows a maximum of ${rule.maxMediaItems} media items`,
       });
     }
   }

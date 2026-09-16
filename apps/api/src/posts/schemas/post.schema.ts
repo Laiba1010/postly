@@ -48,5 +48,6 @@ export class Post {
 export const PostSchema = SchemaFactory.createForClass(Post);
 
 PostSchema.index({ workspaceId: 1, status: 1 });
+PostSchema.index({ workspaceId: 1, status: 1, updatedAt: -1 });
 PostSchema.index({ workspaceId: 1, createdAt: -1 });
 PostSchema.index({ workspaceId: 1, scheduledAt: 1, status: 1 });

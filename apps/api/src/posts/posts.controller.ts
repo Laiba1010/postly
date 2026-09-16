@@ -8,6 +8,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common';
 
@@ -25,6 +26,7 @@ import { PostsService } from './posts.service';
 import { SaveDraftDto } from './dto/save-draft.dto';
 import { SchedulePostDto } from './dto/schedule-post.dto';
 import { ReschedulePostDto } from './dto/reschedule-post.dto';
+import { ListPostsQueryDto } from './dto/list-posts-query.dto';
 
 @Controller('workspaces/:workspaceId/posts')
 @UseGuards(AuthGuard, WorkspaceGuard, RolesGuard)
@@ -53,10 +55,11 @@ export class PostsController {
   async list(
     @Param('workspaceId')
     workspaceId: string,
-  ) {
-    const posts = await this.postsService.listDrafts(workspaceId);
 
-    return { posts };
+    @Query()
+    query: ListPostsQueryDto,
+  ) {
+    return this.postsService.listPosts(workspaceId, query);
   }
 
   @Get(':postId')

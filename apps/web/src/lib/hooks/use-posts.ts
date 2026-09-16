@@ -1,14 +1,21 @@
 import { useQuery } from "@tanstack/react-query";
-import { listDrafts } from "../api/posts";
+import { listPosts, type ListPostsParams } from "../api/posts";
 
-export function usePosts(workspaceId: string | null) {
+export function usePosts(
+  workspaceId: string | null,
+  params: ListPostsParams = {},
+) {
   return useQuery({
-    queryKey: ["posts", workspaceId],
-    queryFn: async () => {
-      if (!workspaceId) return [];
-      const { posts } = await listDrafts(workspaceId);
-      return posts;
-    },
+    queryKey: ["posts", workspaceId, params],
+    queryFn: () =>
+      workspaceId
+        ? listPosts(workspaceId, params)
+        : Promise.resolve({
+            posts: [],
+            pagination: { page: 1, limit: 20, total: 0, totalPages: 0 },
+          }),
     enabled: Boolean(workspaceId),
+    placeholderData: (previous) => previous,
+    staleTime: 5_000,
   });
 }

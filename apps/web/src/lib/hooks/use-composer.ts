@@ -46,11 +46,15 @@ export function useComposer(workspaceId: string | null, postId: string | null) {
     }
   }, [existingDraft, form]);
 
-  function save(values: ComposerFormValues, onSaved?: (post: Post) => void) {
+  function save(
+    values: ComposerFormValues,
+    onSaved?: (post: Post) => void,
+    redirectOnCreate = true,
+  ) {
     saveMutation.mutate(values, {
       onSuccess: ({ post }) => {
         onSaved?.(post);
-        if (!postId) {
+        if (!postId && redirectOnCreate) {
           router.replace(`/posts/${post.id}`);
         }
       },

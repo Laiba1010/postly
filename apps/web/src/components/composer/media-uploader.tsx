@@ -12,7 +12,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { useMediaUpload } from "@/lib/hooks/use-media-upload";
-import { deleteMedia, getMediaFileUrl } from "@/lib/api/media";
+import { getMediaFileUrl } from "@/lib/api/media";
 import { ApiError } from "@/lib/api/client";
 import { Button } from "@/components/ui/button";
 import type { ComposerFormValues } from "@/lib/validations/composer";
@@ -39,6 +39,7 @@ export function MediaUploader({ workspaceId, form }: MediaUploaderProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadMutation = useMediaUpload(workspaceId);
   const [pending, setPending] = useState<PendingUpload[]>([]);
+  const [inputError, setInputError] = useState<string | null>(null);
   const watchedMediaIds = form.watch("mediaIds");
   const mediaIds = watchedMediaIds || [];
 
@@ -55,7 +56,9 @@ export function MediaUploader({ workspaceId, form }: MediaUploaderProps) {
     if (!file) return;
 
     if (mediaIds.length + pending.length >= MAX_MEDIA_COUNT) {
-      alert(`You can only upload a maximum of ${MAX_MEDIA_COUNT} media files.`);
+      setInputError(
+        `You can upload a maximum of ${MAX_MEDIA_COUNT} media files.`,
+      );
       return;
     }
 
@@ -63,13 +66,13 @@ export function MediaUploader({ workspaceId, form }: MediaUploaderProps) {
     const maxSize = isVideo ? MAX_VIDEO_SIZE_BYTES : MAX_IMAGE_SIZE_BYTES;
 
     if (file.size > maxSize) {
-      alert(
-        `File size exceeds limit. Maximum allowed size is ${
-          isVideo ? "100MB" : "15MB"
-        }.`,
+      setInputError(
+        `File size exceeds the ${isVideo ? "100MB video" : "15MB image"} limit.`,
       );
       return;
     }
+
+    setInputError(null);
 
     const tempId = crypto.randomUUID();
     const previewUrl = URL.createObjectURL(file);
@@ -115,16 +118,13 @@ export function MediaUploader({ workspaceId, form }: MediaUploaderProps) {
     });
   }
 
-  async function removeUploaded(mediaId: string) {
+  function removeUploaded(mediaId: string) {
     const current = form.getValues("mediaIds") || [];
     form.setValue(
       "mediaIds",
       current.filter((id) => id !== mediaId),
       { shouldDirty: true, shouldValidate: true },
     );
-    if (workspaceId) {
-      deleteMedia(workspaceId, mediaId).catch(() => {});
-    }
   }
 
   // Position adjustment logic for reordering media items before submit
@@ -169,6 +169,23 @@ export function MediaUploader({ workspaceId, form }: MediaUploaderProps) {
         />
       </div>
 
+      {inputError && (
+        <div
+          role="alert"
+          className="flex items-start justify-between gap-3 rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive"
+        >
+          <span>{inputError}</span>
+          <button
+            type="button"
+            className="shrink-0 font-medium underline underline-offset-2 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            onClick={() => setInputError(null)}
+            aria-label="Dismiss media upload error"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
+
       {(mediaIds.length > 0 || pending.length > 0) && (
         <div className="grid grid-cols-4 gap-2">
           {mediaIds.map((id, index) => {
@@ -195,14 +212,14 @@ export function MediaUploader({ workspaceId, form }: MediaUploaderProps) {
                 </span>
 
                 {/* Action Controls Overlay */}
-                <div className="absolute inset-0 flex items-center justify-between px-1 opacity-0 transition-opacity group-hover:opacity-100 bg-black/20">
+                <div className="absolute inset-0 flex items-center justify-between bg-black/20 px-1 opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100">
                   {/* Reorder Left */}
                   <button
                     type="button"
                     disabled={index === 0}
                     onClick={() => moveMedia(index, index - 1)}
                     aria-label="Move left"
-                    className="rounded-full bg-black/60 p-1 text-white disabled:opacity-30"
+                    className="rounded-full bg-black/60 p-1.5 text-white outline-none transition focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-30"
                   >
                     <ArrowLeft className="h-3 w-3" />
                   </button>
@@ -213,7 +230,7 @@ export function MediaUploader({ workspaceId, form }: MediaUploaderProps) {
                     disabled={index === mediaIds.length - 1}
                     onClick={() => moveMedia(index, index + 1)}
                     aria-label="Move right"
-                    className="rounded-full bg-black/60 p-1 text-white disabled:opacity-30"
+                    className="rounded-full bg-black/60 p-1.5 text-white outline-none transition focus-visible:ring-2 focus-visible:ring-white disabled:cursor-not-allowed disabled:opacity-30"
                   >
                     <ArrowRight className="h-3 w-3" />
                   </button>
@@ -224,7 +241,7 @@ export function MediaUploader({ workspaceId, form }: MediaUploaderProps) {
                   type="button"
                   onClick={() => removeUploaded(id)}
                   aria-label="Remove media"
-                  className="absolute right-1 top-1 z-20 rounded-full bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                  className="absolute right-1 top-1 z-20 rounded-full bg-black/60 p-1.5 text-white opacity-0 outline-none transition-opacity focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-white group-hover:opacity-100"
                 >
                   <X className="h-3 w-3" />
                 </button>

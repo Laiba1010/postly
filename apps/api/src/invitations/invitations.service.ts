@@ -60,6 +60,19 @@ export class InvitationsService {
     email: string,
     role: Role,
   ): Promise<{ invitation: InvitationSummary; rawToken: string }> {
+    if (!Types.ObjectId.isValid(workspaceId)) {
+      throw new BadRequestException({
+        code: 'INVALID_WORKSPACE_ID',
+        message: 'Invalid workspace ID',
+      });
+    }
+    if (!Types.ObjectId.isValid(invitedByUserId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user ID',
+      });
+    }
+
     const normalizedEmail = email.toLowerCase().trim();
 
     if (role === Role.OWNER) {
@@ -149,6 +162,13 @@ export class InvitationsService {
   async listPendingForWorkspace(
     workspaceId: string,
   ): Promise<InvitationSummary[]> {
+    if (!Types.ObjectId.isValid(workspaceId)) {
+      throw new BadRequestException({
+        code: 'INVALID_WORKSPACE_ID',
+        message: 'Invalid workspace ID',
+      });
+    }
+
     const invitations = await this.invitationModel
       .find({
         workspaceId: new Types.ObjectId(workspaceId),
@@ -172,6 +192,19 @@ export class InvitationsService {
     workspaceId: string,
     invitationId: string,
   ): Promise<void> {
+    if (!Types.ObjectId.isValid(workspaceId)) {
+      throw new BadRequestException({
+        code: 'INVALID_WORKSPACE_ID',
+        message: 'Invalid workspace ID',
+      });
+    }
+    if (!Types.ObjectId.isValid(invitationId)) {
+      throw new BadRequestException({
+        code: 'INVALID_INVITATION_ID',
+        message: 'Invalid invitation ID',
+      });
+    }
+
     const result = await this.invitationModel.updateOne(
       {
         _id: invitationId,
@@ -263,17 +296,6 @@ export class InvitationsService {
         }
 
         if (invitation.acceptedAt) {
-          const existingMember = await this.membershipModel
-            .findOne({
-              workspaceId: invitation.workspaceId,
-              userId: new Types.ObjectId(authenticatedUserId),
-            })
-            .session(session)
-            .lean()
-            .exec();
-
-          if (existingMember) return;
-
           throw new BadRequestException({
             code: 'INVITATION_ALREADY_ACCEPTED',
             message: 'This invitation has already been accepted',
@@ -334,26 +356,6 @@ export class InvitationsService {
           { session },
         );
       });
-    } catch (err: any) {
-      if (err?.code === 11000) {
-        // Membership uniqueness is the final concurrency guard. If the
-        // membership now exists for this user, the invitation was effectively
-        // accepted by the winning request.
-        const invitation = await this.invitationModel
-          .findOne({ tokenHash })
-          .select('workspaceId acceptedAt')
-          .lean()
-          .exec();
-
-        if (invitation?.acceptedAt) {
-          const member = await this.membershipModel.exists({
-            workspaceId: invitation.workspaceId,
-            userId: new Types.ObjectId(authenticatedUserId),
-          });
-          if (member) return;
-        }
-      }
-      throw err;
     } finally {
       await session.endSession();
     }

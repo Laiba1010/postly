@@ -52,8 +52,9 @@ export function CancelScheduleDialog({
         <AlertDialogHeader>
           <AlertDialogTitle>Cancel this schedule?</AlertDialogTitle>
           <AlertDialogDescription>
-            This post will return to a cancelled state and will not be
-            published. This action cannot be undone.
+            Any scheduled or retrying targets will be cancelled. A target that
+            is already publishing may continue to finish. This action cannot be
+            undone.
           </AlertDialogDescription>
         </AlertDialogHeader>
         {errorMessage && (

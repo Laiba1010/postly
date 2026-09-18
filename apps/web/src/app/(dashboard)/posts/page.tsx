@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   CalendarClock,
@@ -17,7 +17,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useWorkspaceStore } from "@/lib/stores/workspace-store";
 import { useWorkspaceContext } from "@/lib/hooks/use-workspace-context";
 import { usePosts } from "@/lib/hooks/use-posts";
-import { deleteDraft, type Post, type PostStatus } from "@/lib/api/posts";
+import { deletePost, type Post, type PostStatus } from "@/lib/api/posts";
 import { ApiError } from "@/lib/api/client";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
@@ -135,6 +135,8 @@ export default function PostsPage() {
       limit: 20,
       sortBy: state.sortBy,
       sortDir: state.sortDir,
+      createdFrom: state.createdFrom || undefined,
+      createdTo: state.createdTo || undefined,
     }),
     [state],
   );
@@ -154,7 +156,11 @@ export default function PostsPage() {
   const canManage = workspace?.role === "OWNER" || workspace?.role === "EDITOR";
 
   const hasFilters =
-    Boolean(state.search) || Boolean(state.platform) || state.status !== "ALL";
+    Boolean(state.search) ||
+    Boolean(state.platform) ||
+    Boolean(state.createdFrom) ||
+    Boolean(state.createdTo) ||
+    state.status !== "ALL";
 
   const navigate = useCallback(
     (changes: Record<string, string | undefined>) => {
@@ -184,10 +190,20 @@ export default function PostsPage() {
     [navigate],
   );
 
+  useEffect(() => {
+    const pagination = query.data?.pagination;
+    if (!pagination || query.isFetching) return;
+
+    const lastPage = Math.max(1, pagination.totalPages);
+    if (state.page > lastPage) {
+      navigate({ page: String(lastPage) });
+    }
+  }, [navigate, query.data?.pagination, query.isFetching, state.page]);
+
   const deleteMutation = useMutation({
     mutationFn: (postId: string) =>
       workspaceId
-        ? deleteDraft(workspaceId, postId)
+        ? deletePost(workspaceId, postId)
         : Promise.reject(new Error("No active workspace selected")),
 
     onSuccess: () => {
@@ -257,12 +273,22 @@ export default function PostsPage() {
             sort: value === "updatedAt:desc" ? undefined : value,
           })
         }
+        createdFrom={state.createdFrom}
+        createdTo={state.createdTo}
+        onDateRange={(createdFrom, createdTo) =>
+          resetPage({
+            createdFrom: createdFrom || undefined,
+            createdTo: createdTo || undefined,
+          })
+        }
         onClear={() =>
           resetPage({
             search: undefined,
             platform: undefined,
             sort: undefined,
             status: undefined,
+            createdFrom: undefined,
+            createdTo: undefined,
           })
         }
       />
@@ -290,9 +316,13 @@ export default function PostsPage() {
               (target) => target.status === "FAILED",
             );
 
+            const hasPendingCancellationTarget = post.targets.some(
+              (target) =>
+                target.status === "SCHEDULED" || target.status === "RETRYING",
+            );
             const canCancel =
-              post.status === "SCHEDULED" || post.status === "PUBLISHING";
-
+              post.status === "SCHEDULED" ||
+              (post.status === "PUBLISHING" && hasPendingCancellationTarget);
             return (
               <div
                 key={post.id}
@@ -307,11 +337,8 @@ export default function PostsPage() {
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                       <PostRowStatus post={post} />
 
-                      {scheduled ? (
-                        <span>Scheduled {scheduled}</span>
-                      ) : (
-                        <span>Updated {formatDate(post.updatedAt, null)}</span>
-                      )}
+                      {scheduled && <span>Scheduled {scheduled}</span>}
+                      <span>Updated {formatDate(post.updatedAt, null)}</span>
 
                       <span>•</span>
 
@@ -384,89 +411,142 @@ export default function PostsPage() {
                         </Button>
                       )}
 
-                    <DropdownMenu>
-                      <DropdownMenuTrigger
-                        render={
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            aria-label={`Actions for ${preview(post.content)}`}
-                          >
-                            <MoreHorizontal />
-                          </Button>
-                        }
-                      />
-
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuItem
-                          onClick={() => router.push(`/posts/${post.id}`)}
-                        >
-                          Open
-                        </DropdownMenuItem>
-
-                        {canManage && (
-                          <DropdownMenuItem
-                            onClick={() => duplicate.mutate(post.id)}
-                            disabled={duplicate.isPending}
-                          >
-                            <Copy />
-                            Duplicate
-                          </DropdownMenuItem>
-                        )}
-
-                        {canManage && post.status === "DRAFT" && (
-                          <>
-                            <DropdownMenuSeparator />
-
-                            <DropdownMenuItem
-                              onClick={() => router.push(`/posts/${post.id}`)}
+                    {canManage && (
+                      <DropdownMenu>
+                        <DropdownMenuTrigger
+                          render={
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              aria-label={`Actions for ${preview(post.content)}`}
                             >
-                              Edit
+                              <MoreHorizontal />
+                            </Button>
+                          }
+                        />
+
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem
+                            onClick={() => router.push(`/posts/${post.id}`)}
+                          >
+                            Open
+                          </DropdownMenuItem>
+
+                          {canManage && (
+                            <DropdownMenuItem
+                              onClick={() => duplicate.mutate(post.id)}
+                              disabled={duplicate.isPending}
+                            >
+                              <Copy />
+                              Duplicate
                             </DropdownMenuItem>
+                          )}
 
-                            <AlertDialog>
-                              <AlertDialogTrigger
-                                render={
-                                  <DropdownMenuItem
-                                    variant="destructive"
-                                    onClick={(event) => event.preventDefault()}
-                                  >
-                                    <Trash2 />
-                                    Delete
-                                  </DropdownMenuItem>
-                                }
-                              />
+                          {canManage && post.status === "DRAFT" && (
+                            <>
+                              <DropdownMenuSeparator />
 
-                              <AlertDialogContent>
-                                <AlertDialogHeader>
-                                  <AlertDialogTitle>
-                                    Delete this draft?
-                                  </AlertDialogTitle>
+                              <DropdownMenuItem
+                                onClick={() => router.push(`/posts/${post.id}`)}
+                              >
+                                Edit
+                              </DropdownMenuItem>
 
-                                  <AlertDialogDescription>
-                                    This action cannot be undone and will
-                                    permanently remove this draft.
-                                  </AlertDialogDescription>
-                                </AlertDialogHeader>
+                              <AlertDialog>
+                                <AlertDialogTrigger
+                                  render={
+                                    <DropdownMenuItem
+                                      variant="destructive"
+                                      onClick={(event) =>
+                                        event.preventDefault()
+                                      }
+                                    >
+                                      <Trash2 />
+                                      Delete
+                                    </DropdownMenuItem>
+                                  }
+                                />
 
-                                <AlertDialogFooter>
-                                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>
+                                      Delete this draft?
+                                    </AlertDialogTitle>
 
-                                  <AlertDialogAction
-                                    onClick={() =>
-                                      deleteMutation.mutate(post.id)
-                                    }
-                                    disabled={deleteMutation.isPending}
-                                  >
-                                    Delete draft
-                                  </AlertDialogAction>
-                                </AlertDialogFooter>
-                              </AlertDialogContent>
-                            </AlertDialog>
-                          </>
-                        )}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                                    <AlertDialogDescription>
+                                      This action cannot be undone and will
+                                      permanently remove this post and its saved
+                                      publishing data.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>
+                                      Cancel
+                                    </AlertDialogCancel>
+
+                                    <AlertDialogAction
+                                      onClick={() =>
+                                        deleteMutation.mutate(post.id)
+                                      }
+                                      disabled={deleteMutation.isPending}
+                                    >
+                                      Delete post
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            </>
+                          )}
+
+                          {canManage && post.status === "CANCELLED" && (
+                            <>
+                              <DropdownMenuSeparator />
+                              <AlertDialog>
+                                <AlertDialogTrigger
+                                  render={
+                                    <DropdownMenuItem
+                                      variant="destructive"
+                                      onClick={(event) =>
+                                        event.preventDefault()
+                                      }
+                                    >
+                                      <Trash2 />
+                                      Delete
+                                    </DropdownMenuItem>
+                                  }
+                                />
+                                <AlertDialogContent>
+                                  <AlertDialogHeader>
+                                    <AlertDialogTitle>
+                                      Delete this cancelled post?
+                                    </AlertDialogTitle>
+                                    <AlertDialogDescription>
+                                      This action cannot be undone and will
+                                      permanently remove this post and its saved
+                                      publishing data.
+                                    </AlertDialogDescription>
+                                  </AlertDialogHeader>
+                                  <AlertDialogFooter>
+                                    <AlertDialogCancel>
+                                      Cancel
+                                    </AlertDialogCancel>
+                                    <AlertDialogAction
+                                      onClick={() =>
+                                        deleteMutation.mutate(post.id)
+                                      }
+                                      disabled={deleteMutation.isPending}
+                                    >
+                                      Delete post
+                                    </AlertDialogAction>
+                                  </AlertDialogFooter>
+                                </AlertDialogContent>
+                              </AlertDialog>
+                            </>
+                          )}
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    )}
                   </div>
                 </div>
               </div>
@@ -486,7 +566,9 @@ export default function PostsPage() {
 
             <p className="text-xs text-muted-foreground">
               {hasFilters
-                ? "No posts match your current filters."
+                ? state.search
+                  ? `No posts match “${state.search}”.`
+                  : "No posts match your current filters."
                 : "Create your first post and start planning your content."}
             </p>
           </div>
@@ -500,6 +582,8 @@ export default function PostsPage() {
                   platform: undefined,
                   status: undefined,
                   sort: undefined,
+                  createdFrom: undefined,
+                  createdTo: undefined,
                 })
               }
             >

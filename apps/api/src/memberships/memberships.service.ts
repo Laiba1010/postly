@@ -28,6 +28,13 @@ export class MembershipsService {
   ) {}
 
   async listMembers(workspaceId: string): Promise<MemberSummary[]> {
+    if (!Types.ObjectId.isValid(workspaceId)) {
+      throw new BadRequestException({
+        code: 'INVALID_WORKSPACE_ID',
+        message: 'Invalid workspace ID',
+      });
+    }
+
     const memberships = await this.membershipModel
       .find({ workspaceId: new Types.ObjectId(workspaceId) })
       .populate<{ userId: User & { _id: Types.ObjectId } }>('userId')
@@ -67,6 +74,19 @@ export class MembershipsService {
       throw new BadRequestException({
         code: 'OWNER_TRANSFER_NOT_SUPPORTED',
         message: 'Ownership transfer is not supported in the MVP',
+      });
+    }
+
+    if (!Types.ObjectId.isValid(workspaceId)) {
+      throw new BadRequestException({
+        code: 'INVALID_WORKSPACE_ID',
+        message: 'Invalid workspace ID',
+      });
+    }
+    if (!Types.ObjectId.isValid(membershipId)) {
+      throw new BadRequestException({
+        code: 'INVALID_MEMBERSHIP_ID',
+        message: 'Invalid membership ID',
       });
     }
 
@@ -165,6 +185,19 @@ export class MembershipsService {
     membershipId: string,
     actingUserId: string,
   ): Promise<void> {
+    if (!Types.ObjectId.isValid(workspaceId)) {
+      throw new BadRequestException({
+        code: 'INVALID_WORKSPACE_ID',
+        message: 'Invalid workspace ID',
+      });
+    }
+    if (!Types.ObjectId.isValid(membershipId)) {
+      throw new BadRequestException({
+        code: 'INVALID_MEMBERSHIP_ID',
+        message: 'Invalid membership ID',
+      });
+    }
+
     const workspaceObjectId = new Types.ObjectId(workspaceId);
     const membershipObjectId = new Types.ObjectId(membershipId);
 

@@ -110,6 +110,8 @@ export type PostsUrlState = {
   status: PostsStatusFilter;
   platform: SocialProvider | undefined;
   search: string;
+  createdFrom: string;
+  createdTo: string;
   page: number;
   sortBy: "createdAt" | "scheduledAt" | "updatedAt";
   sortDir: "asc" | "desc";
@@ -136,6 +138,9 @@ export function readPostsUrlState(
 
   const rawSearch = searchParams.get("search") ?? "";
 
+  const rawCreatedFrom = searchParams.get("createdFrom") ?? "";
+  const rawCreatedTo = searchParams.get("createdTo") ?? "";
+
   const rawPage = Number(searchParams.get("page") ?? "1");
 
   const rawSort = searchParams.get("sort") ?? "updatedAt:desc";
@@ -153,6 +158,8 @@ export function readPostsUrlState(
     status,
     platform,
     search: rawSearch,
+    createdFrom: rawCreatedFrom,
+    createdTo: rawCreatedTo,
     page: Number.isInteger(rawPage) && rawPage > 0 ? rawPage : 1,
     sortBy: sortOption!.sortBy,
     sortDir: sortOption!.sortDir,

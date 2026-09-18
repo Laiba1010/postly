@@ -137,11 +137,29 @@ export class AuthService {
     }
 
     const passwordHash = await this.passwordService.hash(password);
-    const user = await this.usersService.create(
-      name,
-      normalizedEmail,
-      passwordHash,
-    );
+    let user;
+    try {
+      user = await this.usersService.create(
+        name,
+        normalizedEmail,
+        passwordHash,
+      );
+    } catch (error) {
+      // The pre-check above is not sufficient under concurrent signups.
+      // The unique MongoDB email index remains the final source of truth.
+      if (
+        error &&
+        typeof error === 'object' &&
+        'code' in error &&
+        (error as { code?: number }).code === 11000
+      ) {
+        throw new ConflictException({
+          code: 'EMAIL_ALREADY_EXISTS',
+          message: 'An account with this email already exists',
+        });
+      }
+      throw error;
+    }
 
     const sessionId = await this.sessionsService.createSession(
       user.id.toString(),

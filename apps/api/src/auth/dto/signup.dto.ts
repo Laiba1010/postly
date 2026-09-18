@@ -11,6 +11,6 @@ export class SignupDto {
 
   @IsString()
   @MinLength(8)
-  @MaxLength(72) // bcrypt truncates beyond 72 bytes — enforce at input
+  @MaxLength(72)
   password: string;
 }

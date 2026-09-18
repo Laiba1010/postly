@@ -47,7 +47,6 @@ export class PostStatusAggregator {
     const targetQuery = this.postTargetModel
       .find({
         postId: postObjectId,
-        status: { $ne: PostTargetStatus.CANCELLED },
       })
       .select('status')
       .lean();
@@ -58,6 +57,8 @@ export class PostStatusAggregator {
     if (targets.length === 0) return post.status;
 
     const statuses = targets.map((target) => target.status);
+    const hasPublished = statuses.includes(PostTargetStatus.PUBLISHED);
+    const hasCancelled = statuses.includes(PostTargetStatus.CANCELLED);
     const allScheduled = statuses.every(
       (status) => status === PostTargetStatus.SCHEDULED,
     );
@@ -72,14 +73,23 @@ export class PostStatusAggregator {
     const allPublished = statuses.every(
       (status) => status === PostTargetStatus.PUBLISHED,
     );
+    const allCancelled = statuses.every(
+      (status) => status === PostTargetStatus.CANCELLED,
+    );
     const allFailed = statuses.every(
       (status) => status === PostTargetStatus.FAILED,
     );
 
     let nextStatus: PostStatus;
 
-    if (allScheduled) {
+    if (allCancelled) {
+      nextStatus = PostStatus.CANCELLED;
+    } else if (hasPublished && hasCancelled) {
+      nextStatus = PostStatus.PARTIALLY_PUBLISHED;
+    } else if (allScheduled) {
       nextStatus = PostStatus.SCHEDULED;
+    } else if (hasPublished && (hasInFlight || hasScheduled)) {
+      nextStatus = PostStatus.PARTIALLY_PUBLISHED;
     } else if (hasInFlight || hasScheduled) {
       nextStatus = PostStatus.PUBLISHING;
     } else if (allPublished) {

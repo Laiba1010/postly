@@ -11,6 +11,7 @@ function query<T>(value: T) {
     lean: jest.fn().mockReturnThis(),
     exec: jest.fn().mockResolvedValue(value),
   };
+
   return q;
 }
 
@@ -18,11 +19,12 @@ describe('PostsService.getPostStatus', () => {
   const postModel = { findOne: jest.fn() };
   const postTargetModel = { find: jest.fn() };
   const publishingAttemptModel = { find: jest.fn() };
+
   const service = new PostsService(
     {} as never,
     postModel as never,
     postTargetModel as never,
-    {} as never,
+    publishingAttemptModel as never,
     {} as never,
     {} as never,
     {} as never,
@@ -77,6 +79,7 @@ describe('PostsService.getPostStatus', () => {
     expect(result.postId).toBe('post-1');
     expect(result.status).toBe(PostStatus.PUBLISHING);
     expect(result.targets).toHaveLength(1);
+
     expect(result.targets[0]).toMatchObject({
       id: 'target-1',
       platform: 'INSTAGRAM',
@@ -103,6 +106,7 @@ describe('PostsService.getPostStatus', () => {
       updatedAt: new Date(),
       destinations: [],
     };
+
     const target = {
       _id: { toString: () => 'target-1' },
       platform: 'FACEBOOK',

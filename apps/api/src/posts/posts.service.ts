@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   Logger,
@@ -24,7 +25,6 @@ import {
   PublishingAttempt,
   PublishingAttemptDocument,
 } from './schemas/publishing-attempt.schema';
-import { PublishingAttemptStatus } from './enums/publishing-attempt-status.enum';
 
 import { PostStatus } from './enums/post-status.enum';
 import { PostTargetStatus } from './enums/post-target-status.enum';
@@ -363,7 +363,11 @@ export class PostsService {
     if (query.createdFrom || query.createdTo) {
       const createdAt: Record<string, Date> = {};
       if (query.createdFrom) {
-        const from = new Date(query.createdFrom);
+        const from = new Date(
+          /^\d{4}-\d{2}-\d{2}$/.test(query.createdFrom)
+            ? `${query.createdFrom}T00:00:00.000Z`
+            : query.createdFrom,
+        );
         if (Number.isNaN(from.getTime()))
           throw new BadRequestException({
             code: 'INVALID_CREATED_FROM',
@@ -372,7 +376,11 @@ export class PostsService {
         createdAt.$gte = from;
       }
       if (query.createdTo) {
-        const to = new Date(query.createdTo);
+        const to = new Date(
+          /^\d{4}-\d{2}-\d{2}$/.test(query.createdTo)
+            ? `${query.createdTo}T23:59:59.999Z`
+            : query.createdTo,
+        );
         if (Number.isNaN(to.getTime()))
           throw new BadRequestException({
             code: 'INVALID_CREATED_TO',
@@ -457,7 +465,7 @@ export class PostsService {
       sortBy: PostListSortBy.UPDATED_AT,
       sortDir: PostListSortDir.DESC,
     } as ListPostsQueryDto);
-    return result.posts.map(({ targets: _targets, ...post }) => post);
+    return result.posts.map(({ ...post }) => post);
   }
 
   async duplicateDraft(
@@ -496,7 +504,7 @@ export class PostsService {
     return this.toSummary(newPost);
   }
 
-  async deleteDraft(workspaceId: string, postId: string): Promise<void> {
+  async deletePost(workspaceId: string, postId: string): Promise<void> {
     if (!Types.ObjectId.isValid(postId)) {
       throw new NotFoundException({
         code: 'POST_NOT_FOUND',
@@ -511,7 +519,7 @@ export class PostsService {
           .findOne({
             _id: new Types.ObjectId(postId),
             workspaceId: new Types.ObjectId(workspaceId),
-            status: PostStatus.DRAFT,
+            status: { $in: [PostStatus.DRAFT, PostStatus.CANCELLED] },
           })
           .session(session)
           .exec();
@@ -519,7 +527,7 @@ export class PostsService {
         if (!post) {
           throw new NotFoundException({
             code: 'POST_NOT_FOUND',
-            message: 'Post not found or is not a draft',
+            message: 'Post not found or cannot be deleted in its current state',
           });
         }
 
@@ -534,6 +542,27 @@ export class PostsService {
             { session },
           );
         }
+
+        const targetIds = await this.postTargetModel
+          .find({
+            postId: post._id,
+            workspaceId: new Types.ObjectId(workspaceId),
+          })
+          .distinct('_id')
+          .session(session)
+          .exec();
+
+        if (targetIds.length > 0) {
+          await this.publishingAttemptModel.deleteMany(
+            { postTargetId: { $in: targetIds } },
+            { session },
+          );
+        }
+
+        await this.postTargetModel.deleteMany(
+          { postId: post._id, workspaceId: new Types.ObjectId(workspaceId) },
+          { session },
+        );
 
         await post.deleteOne({ session });
       });
@@ -556,6 +585,7 @@ export class PostsService {
 
     const session = await this.connection.startSession();
     let updatedPost!: PostDocument;
+    const removedScheduledTargetIds: string[] = [];
 
     try {
       await session.withTransaction(async () => {
@@ -574,12 +604,17 @@ export class PostsService {
           });
         }
 
-        if (post.status !== PostStatus.DRAFT) {
+        if (
+          post.status !== PostStatus.DRAFT &&
+          post.status !== PostStatus.SCHEDULED
+        ) {
           throw new ForbiddenException({
             code: 'POST_NOT_EDITABLE',
-            message: 'Only draft posts can be edited',
+            message: 'Only draft and scheduled posts can be edited',
           });
         }
+
+        const isScheduledPost = post.status === PostStatus.SCHEDULED;
 
         const previousMediaIds = (post.mediaIds || []).map((id) =>
           id.toString(),
@@ -592,6 +627,13 @@ export class PostsService {
                 dto.destinations,
               )
             : post.destinations;
+
+        if (isScheduledPost && destinations.length === 0) {
+          throw new BadRequestException({
+            code: 'CANNOT_SAVE_SCHEDULED_WITHOUT_DESTINATIONS',
+            message: 'A scheduled post must have at least one platform',
+          });
+        }
 
         const mediaIds =
           dto.mediaIds !== undefined
@@ -628,6 +670,61 @@ export class PostsService {
           (id) => !newMediaIds.includes(id),
         );
 
+        let targetsToRemove: Types.ObjectId[] = [];
+        let destinationsToAdd: typeof destinations = [];
+
+        if (isScheduledPost) {
+          const existingTargets = await this.postTargetModel
+            .find({
+              postId: post._id,
+              workspaceId: new Types.ObjectId(workspaceId),
+            })
+            .session(session)
+            .exec();
+
+          const nonScheduledTarget = existingTargets.find(
+            (target) => target.status !== PostTargetStatus.SCHEDULED,
+          );
+
+          if (nonScheduledTarget) {
+            throw new ConflictException({
+              code: 'POST_PUBLISHING_STARTED',
+              message:
+                'This post has started publishing and can no longer be edited',
+            });
+          }
+
+          const nextConnectionIds = new Set(
+            destinations.map((destination) =>
+              destination.socialConnectionId.toString(),
+            ),
+          );
+
+          targetsToRemove = existingTargets
+            .filter(
+              (target) =>
+                !nextConnectionIds.has(target.socialConnectionId.toString()),
+            )
+            .map((target) => target._id);
+
+          removedScheduledTargetIds.push(
+            ...targetsToRemove.map((targetId) => targetId.toString()),
+          );
+
+          const existingConnectionIds = new Set(
+            existingTargets.map((target) =>
+              target.socialConnectionId.toString(),
+            ),
+          );
+
+          destinationsToAdd = destinations.filter(
+            (destination) =>
+              !existingConnectionIds.has(
+                destination.socialConnectionId.toString(),
+              ),
+          );
+        }
+
         if (added.length > 0) {
           const result = await this.mediaModel.updateMany(
             {
@@ -663,11 +760,87 @@ export class PostsService {
         post.content = content;
         post.destinations = destinations as any;
         post.mediaIds = mediaIds as any;
+
+        if (isScheduledPost) {
+          if (targetsToRemove.length > 0) {
+            await this.publishingAttemptModel.deleteMany(
+              { postTargetId: { $in: targetsToRemove } },
+              { session },
+            );
+
+            await this.postTargetModel.deleteMany(
+              {
+                _id: { $in: targetsToRemove },
+                postId: post._id,
+                workspaceId: new Types.ObjectId(workspaceId),
+              },
+              { session },
+            );
+          }
+
+          if (destinationsToAdd.length > 0) {
+            await this.postTargetModel.insertMany(
+              destinationsToAdd.map((destination) => ({
+                postId: post._id,
+                workspaceId: post.workspaceId,
+                platform: destination.provider,
+                socialConnectionId: destination.socialConnectionId,
+                status: PostTargetStatus.SCHEDULED,
+                scheduledAt: post.scheduledAt,
+                retryCount: 0,
+                nextRetryAt: null,
+                externalPostId: null,
+              })),
+              { session },
+            );
+          }
+        }
+
         await post.save({ session });
         updatedPost = post;
       });
     } finally {
       await session.endSession();
+    }
+
+    if (updatedPost.status === PostStatus.SCHEDULED) {
+      await Promise.all(
+        removedScheduledTargetIds.map(async (targetId) => {
+          const queueRemoved = await this.queueService.removeJob(targetId);
+
+          if (!queueRemoved) {
+            this.logger.error(
+              `Queue cleanup failed while removing scheduled post target ${targetId}`,
+            );
+          }
+        }),
+      );
+
+      const currentTargets = await this.postTargetModel.find({
+        postId: updatedPost._id,
+        workspaceId: new Types.ObjectId(workspaceId),
+        status: PostTargetStatus.SCHEDULED,
+      });
+
+      await Promise.all(
+        currentTargets.map(async (target) => {
+          const queueSynced = await this.queueService.rescheduleJob(
+            {
+              postTargetId: target._id.toString(),
+              workspaceId,
+              postId: updatedPost._id.toString(),
+              platform: target.platform,
+            },
+            updatedPost.scheduledAt!,
+          );
+
+          if (!queueSynced) {
+            this.logger.error(
+              `Queue synchronization failed while editing scheduled post target ${target._id.toString()}`,
+            );
+          }
+        }),
+      );
     }
 
     return this.toSummary(updatedPost);
@@ -963,6 +1136,19 @@ export class PostsService {
           .lean()
           .exec();
 
+        const [publishedTarget, inFlightTarget] = await Promise.all([
+          this.postTargetModel.exists({
+            postId: post._id,
+            workspaceId: workspaceObjectId,
+            status: PostTargetStatus.PUBLISHED,
+          }),
+          this.postTargetModel.exists({
+            postId: post._id,
+            workspaceId: workspaceObjectId,
+            status: PostTargetStatus.PUBLISHING,
+          }),
+        ]);
+
         if (post.status === PostStatus.PUBLISHING && targets.length === 0) {
           // Active PUBLISHING cancellation remains deliberately out of scope.
           // We cannot safely interrupt an already-running external publish in
@@ -992,7 +1178,11 @@ export class PostsService {
           );
         }
 
-        post.status = PostStatus.CANCELLED;
+        post.status = publishedTarget
+          ? PostStatus.PARTIALLY_PUBLISHED
+          : inFlightTarget
+            ? PostStatus.PUBLISHING
+            : PostStatus.CANCELLED;
         await post.save({ session });
         cancelledPost = post;
       });

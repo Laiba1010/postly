@@ -1,5 +1,7 @@
 import type { PostListItem, PostTargetStatus } from "@/lib/api/posts";
 import { Badge } from "@/components/ui/badge";
+import { PLATFORM_OPTIONS } from "@/lib/posts-url";
+
 const labels: Record<PostTargetStatus, string> = {
   SCHEDULED: "Scheduled",
   PUBLISHING: "Publishing",
@@ -8,6 +10,7 @@ const labels: Record<PostTargetStatus, string> = {
   FAILED: "Failed",
   CANCELLED: "Cancelled",
 };
+
 const variants: Record<
   PostTargetStatus,
   "secondary" | "default" | "destructive" | "outline"
@@ -19,8 +22,19 @@ const variants: Record<
   FAILED: "destructive",
   CANCELLED: "outline",
 };
+
+function platformLabel(platform: PostListItem["targets"][number]["platform"]) {
+  return (
+    PLATFORM_OPTIONS.find((option) => option.value === platform)?.label ??
+    platform
+  );
+}
+
 export function PostRowStatus({ post }: { post: PostListItem }) {
-  if (!post.targets.length) return <Badge variant="secondary">Draft</Badge>;
+  if (!post.targets.length) {
+    return <Badge variant="secondary">Draft</Badge>;
+  }
+
   return (
     <div className="flex flex-wrap gap-1.5">
       {post.targets.map((target) => (
@@ -29,14 +43,7 @@ export function PostRowStatus({ post }: { post: PostListItem }) {
           variant={variants[target.status]}
           title={`${target.accountName}: ${labels[target.status]}`}
         >
-          {target.platform === "INSTAGRAM"
-            ? "Instagram"
-            : target.platform === "FACEBOOK"
-              ? "Facebook"
-              : target.platform === "LINKEDIN"
-                ? "LinkedIn"
-                : "X"}{" "}
-          · {labels[target.status]}
+          {platformLabel(target.platform)} · {labels[target.status]}
         </Badge>
       ))}
     </div>

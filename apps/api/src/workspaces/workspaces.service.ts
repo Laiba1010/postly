@@ -1,4 +1,9 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectConnection, InjectModel } from '@nestjs/mongoose';
 import { Connection, Model, Types } from 'mongoose';
 import { Workspace, WorkspaceDocument } from './schemas/workspace.schema';
@@ -85,39 +90,57 @@ export class WorkspacesService {
     userId: string,
     name: string,
   ): Promise<WorkspaceWithRole> {
-    const slug = await this.generateUniqueSlug(name);
-    const session = await this.connection.startSession();
-
-    try {
-      let workspace!: WorkspaceDocument;
-
-      await session.withTransaction(async () => {
-        const created = await this.workspaceModel.create([{ name, slug }], {
-          session,
-        });
-        workspace = created[0];
-
-        await this.membershipModel.create(
-          [
-            {
-              userId: new Types.ObjectId(userId),
-              workspaceId: workspace._id,
-              role: Role.OWNER,
-            },
-          ],
-          { session },
-        );
+    if (!Types.ObjectId.isValid(userId)) {
+      throw new BadRequestException({
+        code: 'INVALID_USER_ID',
+        message: 'Invalid user ID',
       });
-
-      return {
-        id: workspace._id.toString(),
-        name: workspace.name,
-        slug: workspace.slug,
-        role: Role.OWNER,
-      };
-    } finally {
-      await session.endSession();
     }
+
+    // The unique slug index is the final source of truth. The pre-check in
+    // generateUniqueSlug() is only an optimization, so retry a rare E11000
+    // caused by another workspace winning the same slug concurrently.
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const slug = await this.generateUniqueSlug(name);
+      const session = await this.connection.startSession();
+
+      try {
+        let workspace!: WorkspaceDocument;
+
+        await session.withTransaction(async () => {
+          const created = await this.workspaceModel.create([{ name, slug }], {
+            session,
+          });
+          workspace = created[0];
+
+          await this.membershipModel.create(
+            [
+              {
+                userId: new Types.ObjectId(userId),
+                workspaceId: workspace._id,
+                role: Role.OWNER,
+              },
+            ],
+            { session },
+          );
+        });
+
+        return {
+          id: workspace._id.toString(),
+          name: workspace.name,
+          slug: workspace.slug,
+          role: Role.OWNER,
+        };
+      } catch (err: any) {
+        if (err?.code !== 11000 || attempt === 4) {
+          throw err;
+        }
+      } finally {
+        await session.endSession();
+      }
+    }
+
+    throw new Error('Workspace creation failed after slug collision retries');
   }
 
   async listForUser(userId: string): Promise<WorkspaceWithRole[]> {
@@ -182,6 +205,13 @@ export class WorkspacesService {
     workspaceId: string,
     updates: { name?: string },
   ): Promise<WorkspaceWithRole> {
+    if (!Types.ObjectId.isValid(workspaceId)) {
+      throw new BadRequestException({
+        code: 'INVALID_WORKSPACE_ID',
+        message: 'Invalid workspace ID',
+      });
+    }
+
     const workspace = await this.workspaceModel.findById(workspaceId).exec();
     if (!workspace) {
       throw new NotFoundException({
@@ -210,6 +240,13 @@ export class WorkspacesService {
    * deliberately handled after the durable database deletion.
    */
   async deleteWorkspace(workspaceId: string): Promise<void> {
+    if (!Types.ObjectId.isValid(workspaceId)) {
+      throw new BadRequestException({
+        code: 'INVALID_WORKSPACE_ID',
+        message: 'Invalid workspace ID',
+      });
+    }
+
     const workspaceObjectId = new Types.ObjectId(workspaceId);
     const session = await this.connection.startSession();
     let storageKeys: string[] = [];

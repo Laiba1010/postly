@@ -189,7 +189,7 @@ export function retryTarget(
   );
 }
 
-export function deleteDraft(workspaceId: string, postId: string) {
+export function deletePost(workspaceId: string, postId: string) {
   return apiClient.delete<{ success: boolean }>(
     `/api/workspaces/${workspaceId}/posts/${postId}`,
   );

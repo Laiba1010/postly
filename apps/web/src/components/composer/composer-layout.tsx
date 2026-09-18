@@ -1,11 +1,17 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import type { UseFormReturn } from "react-hook-form";
-import { ArrowLeft, AlertTriangle, Loader2, CheckCircle2 } from "lucide-react";
+import {
+  ArrowLeft,
+  AlertTriangle,
+  Loader2,
+  CheckCircle2,
+  CalendarClock,
+} from "lucide-react";
 import type { ComposerFormValues } from "@/lib/validations/composer";
-import { Button, buttonVariants } from "@/components/ui/button";
+import { Button } from "@/components/ui/button";
 import { ApiError } from "@/lib/api/client";
 import { PlatformSelector } from "./platform-selector";
 import { ContentEditor } from "./content-editor";
@@ -14,7 +20,7 @@ import { PostPreview } from "./post-preview";
 import type { Post } from "@/lib/api/posts";
 import { useSocialConnections } from "@/lib/hooks/use-social-connections";
 import { Skeleton } from "@/components/ui/skeleton";
-import { cn } from "@/lib/utils";
+import { ScheduleDialog } from "@/components/posts/schedule-dialog";
 
 interface ComposerLayoutProps {
   workspaceId: string | null;
@@ -23,7 +29,11 @@ interface ComposerLayoutProps {
     form: UseFormReturn<ComposerFormValues>;
     isLoadingDraft: boolean;
     existingDraft?: Post | null;
-    save: (values: ComposerFormValues, onSaved?: (post: Post) => void) => void;
+    save: (
+      values: ComposerFormValues,
+      onSaved?: (post: Post) => void,
+      redirectOnCreate?: boolean,
+    ) => void;
     isSaving: boolean;
     saveError: unknown;
   };
@@ -35,11 +45,15 @@ export function ComposerLayout({
   composer,
 }: ComposerLayoutProps) {
   const { form, isLoadingDraft, save, isSaving, saveError } = composer;
+  const router = useRouter();
   const postStatus = composer.existingDraft?.status;
 
+  const isDraft = postStatus === "DRAFT";
+  const isScheduled = postStatus === "SCHEDULED";
   const isEditable =
-    canManage && (!composer.existingDraft || postStatus === "DRAFT");
+    canManage && (!composer.existingDraft || isDraft || isScheduled);
   const [savedMessage, setSavedMessage] = useState(false);
+  const [scheduleTarget, setScheduleTarget] = useState<Post | null>(null);
   const { data: connections, isLoading: isLoadingConnections } =
     useSocialConnections(workspaceId);
 
@@ -89,39 +103,76 @@ export function ComposerLayout({
       (d) => !activeConnectionIds.has(d.socialConnectionId),
     );
 
-  function handleSave(values: ComposerFormValues) {
-    if (!isEditable) {
-      return;
-    }
-    setSavedMessage(false);
-
-    // Clean up destinations pointing to removed/disconnected accounts
-    const cleanedValues = {
+  function cleanValues(values: ComposerFormValues): ComposerFormValues {
+    return {
       ...values,
       destinations: (values.destinations || []).filter((d) =>
         activeConnectionIds.has(d.socialConnectionId),
       ),
     };
+  }
 
-    save(cleanedValues, (updatedPost) => {
-      // Reset form state with freshly saved values
+  function handleSave(values: ComposerFormValues) {
+    if (!isEditable) return;
+
+    setSavedMessage(false);
+    const cleanedValues = cleanValues(values);
+
+    save(cleanedValues, () => {
       form.reset(cleanedValues);
       setSavedMessage(true);
-      setTimeout(() => setSavedMessage(false), 3000);
+      window.setTimeout(() => setSavedMessage(false), 3000);
     });
+  }
+
+  function handleSchedule(values: ComposerFormValues) {
+    if (!isEditable || !isDraft || isSaving) return;
+
+    const cleanedValues = cleanValues(values);
+
+    const openSchedule = (post: Post) => {
+      form.reset(cleanedValues);
+      setScheduleTarget(post);
+    };
+
+    // Always persist the current composer state before opening scheduling.
+    // This makes Schedule safe for both new posts and existing drafts, while
+    // cancelling the schedule still leaves the saved draft intact.
+    if (composer.existingDraft && !form.formState.isDirty) {
+      setScheduleTarget(composer.existingDraft);
+      return;
+    }
+
+    save(cleanedValues, openSchedule, false);
+  }
+
+  function handleLeave() {
+    if (isSaving) return;
+
+    if (form.formState.isDirty && isEditable) {
+      const shouldLeave = window.confirm(
+        "You have unsaved changes. Leave without saving?",
+      );
+      if (!shouldLeave) return;
+    }
+
+    router.push("/posts");
   }
 
   return (
     <div className="space-y-6">
       {/* Page Header */}
       <div className="flex items-center gap-4">
-        <Link
-          href="/posts"
-          className="inline-flex items-center justify-center rounded-md border p-2 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        <Button
+          type="button"
+          variant="outline"
+          size="icon"
+          onClick={handleLeave}
+          disabled={isSaving}
           aria-label="Back to posts"
         >
           <ArrowLeft className="h-4 w-4" aria-hidden="true" />
-        </Link>
+        </Button>
         <div>
           <h1 className="text-xl font-semibold tracking-tight">
             {!composer.existingDraft
@@ -132,7 +183,9 @@ export function ComposerLayout({
           </h1>
           <p className="text-sm text-muted-foreground">
             {isEditable
-              ? "Craft content, organize channels, and preview formatting prior to publishing."
+              ? isScheduled
+                ? "Update the content, channels, or media for this scheduled post. Publishing time is managed separately."
+                : "Craft content, organize channels, and preview formatting prior to publishing."
               : `This ${postStatus?.toLowerCase()} post is read-only.`}
           </p>
         </div>
@@ -201,7 +254,9 @@ export function ComposerLayout({
             {savedMessage && (
               <p className="inline-flex items-center gap-1.5 text-sm font-medium text-emerald-600 dark:text-emerald-400">
                 <CheckCircle2 className="h-4 w-4" aria-hidden="true" />
-                Draft saved successfully.
+                {isScheduled
+                  ? "Changes saved successfully."
+                  : "Draft saved successfully."}
               </p>
             )}
           </div>
@@ -209,33 +264,64 @@ export function ComposerLayout({
 
         {/* Footer Actions */}
         <div className="col-span-full flex items-center justify-end gap-3 border-t pt-4">
-          <Link
-            href="/posts"
-            className={cn(
-              buttonVariants({ variant: "outline" }),
-              isSaving && "pointer-events-none opacity-50",
-            )}
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleLeave}
+            disabled={isSaving}
           >
-            Cancel
-          </Link>
+            Back to posts
+          </Button>
 
           {isEditable && (
-            <Button type="submit" disabled={isSaving}>
-              {isSaving ? (
-                <>
-                  <Loader2
-                    className="mr-2 h-4 w-4 animate-spin"
-                    aria-hidden="true"
-                  />
-                  Saving...
-                </>
-              ) : (
-                "Save draft"
+            <div className="flex items-center gap-2">
+              <Button type="submit" variant="outline" disabled={isSaving}>
+                {isSaving ? (
+                  <>
+                    <Loader2
+                      className="mr-2 h-4 w-4 animate-spin"
+                      aria-hidden="true"
+                    />
+                    Saving...
+                  </>
+                ) : isScheduled ? (
+                  "Save changes"
+                ) : (
+                  "Save draft"
+                )}
+              </Button>
+
+              {isDraft && (
+                <Button
+                  type="button"
+                  onClick={() =>
+                    form.handleSubmit(handleSchedule, () => form.trigger())()
+                  }
+                  disabled={isSaving || isLoadingConnections}
+                >
+                  <CalendarClock className="mr-2 h-4 w-4" aria-hidden="true" />
+                  Schedule
+                </Button>
               )}
-            </Button>
+            </div>
           )}
         </div>
       </form>
+      {scheduleTarget && workspaceId && (
+        <ScheduleDialog
+          workspaceId={workspaceId}
+          post={scheduleTarget}
+          mode="schedule"
+          open
+          onOpenChange={(open) => {
+            if (!open) {
+              const postId = scheduleTarget.id;
+              setScheduleTarget(null);
+              router.replace(`/posts/${postId}`);
+            }
+          }}
+        />
+      )}
     </div>
   );
 }

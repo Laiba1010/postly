@@ -7,6 +7,7 @@ import { useQuery } from "@tanstack/react-query";
 import { listPostTargets, type PostTarget } from "@/lib/api/posts";
 import { useRetryTarget } from "@/lib/hooks/use-retry-target";
 import { ApiError } from "@/lib/api/client";
+import { PLATFORM_OPTIONS } from "@/lib/posts-url";
 import { Button } from "@/components/ui/button";
 
 import {
@@ -39,8 +40,17 @@ export function RetryFailedDialog({
   onOpenChange: (open: boolean) => void;
   onDone?: () => void;
 }) {
-  const [selected, setSelected] = useState<string[]>([]);
+  /*
+   * null means "all currently failed targets".
+   *
+   * Once the user changes a checkbox, selection becomes explicit.
+   * This lets the dialog preselect all failed targets without using
+   * an effect that synchronously calls setState().
+   */
+  const [selected, setSelected] = useState<string[] | null>(null);
+
   const [result, setResult] = useState<RetryResult | null>(null);
+
   const [isRetrying, setIsRetrying] = useState(false);
 
   const targetsQuery = useQuery({
@@ -55,21 +65,27 @@ export function RetryFailedDialog({
     (target) => target.status === "FAILED",
   );
 
+  /*
+   * When no explicit selection exists, every currently failed target
+   * is selected by default.
+   */
+  const selectedIds = selected ?? failedTargets.map((target) => target.id);
+
   function handleOpenChange(nextOpen: boolean) {
-    if (!nextOpen) {
-      setSelected([]);
-      setResult(null);
-      setIsRetrying(false);
-    } else {
-      setSelected([]);
-      setResult(null);
-    }
+    /*
+     * Reset temporary dialog state whenever the dialog changes state.
+     * This happens in response to the user's interaction rather than
+     * from an effect.
+     */
+    setSelected(null);
+    setResult(null);
+    setIsRetrying(false);
 
     onOpenChange(nextOpen);
   }
 
   function handleSelectAll() {
-    if (selected.length === failedTargets.length) {
+    if (selectedIds.length === failedTargets.length) {
       setSelected([]);
       return;
     }
@@ -78,23 +94,29 @@ export function RetryFailedDialog({
   }
 
   function toggle(id: string) {
-    setSelected((current) =>
-      current.includes(id)
-        ? current.filter((item) => item !== id)
-        : [...current, id],
-    );
+    setSelected((current) => {
+      const currentIds = current ?? failedTargets.map((target) => target.id);
+
+      return currentIds.includes(id)
+        ? currentIds.filter((item) => item !== id)
+        : [...currentIds, id];
+    });
   }
 
   async function handleRetry() {
-    if (selected.length === 0 || isRetrying) {
+    if (selectedIds.length === 0 || isRetrying) {
       return;
     }
 
     setIsRetrying(true);
 
     try {
+      /*
+       * Each target is handled independently so one stale target
+       * state does not cause the whole batch to fail.
+       */
       const outcomes = await Promise.all(
-        selected.map(async (targetId) => {
+        selectedIds.map(async (targetId) => {
           try {
             await retry.mutateAsync({
               postId,
@@ -140,12 +162,25 @@ export function RetryFailedDialog({
         failed,
       });
 
+      /*
+       * Refresh the target state once after the entire batch settles.
+       */
       await targetsQuery.refetch();
 
+      /*
+       * The parent invalidates the posts list once for the batch.
+       */
       onDone?.();
     } finally {
       setIsRetrying(false);
     }
+  }
+
+  function platformLabel(platform: PostTarget["platform"]) {
+    return (
+      PLATFORM_OPTIONS.find((option) => option.value === platform)?.label ??
+      platform
+    );
   }
 
   return (
@@ -216,7 +251,7 @@ export function RetryFailedDialog({
                 onClick={handleSelectAll}
                 disabled={isRetrying}
               >
-                {selected.length === failedTargets.length
+                {selectedIds.length === failedTargets.length
                   ? "Clear all"
                   : "Select all"}
               </Button>
@@ -229,12 +264,14 @@ export function RetryFailedDialog({
               >
                 <input
                   type="checkbox"
-                  checked={selected.includes(target.id)}
+                  checked={selectedIds.includes(target.id)}
                   onChange={() => toggle(target.id)}
                   disabled={isRetrying}
                 />
 
-                <span className="font-medium">{target.platform}</span>
+                <span className="font-medium">
+                  {platformLabel(target.platform)}
+                </span>
 
                 <span className="text-muted-foreground">
                   {target.retryCount ?? 0} automatic retries
@@ -256,12 +293,12 @@ export function RetryFailedDialog({
           {!result && (
             <Button
               onClick={handleRetry}
-              disabled={isRetrying || selected.length === 0}
+              disabled={isRetrying || selectedIds.length === 0}
             >
               {isRetrying
                 ? "Retrying…"
-                : `Retry ${selected.length} target${
-                    selected.length === 1 ? "" : "s"
+                : `Retry ${selectedIds.length} target${
+                    selectedIds.length === 1 ? "" : "s"
                   }`}
             </Button>
           )}

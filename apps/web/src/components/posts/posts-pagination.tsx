@@ -34,8 +34,7 @@ export function PostsPagination({
       <p className="text-xs text-muted-foreground">
         Showing {start}-{end} of {total}
       </p>
-      <div className="flex items-center gap-1">
-        {" "}
+      <div className="flex items-center gap-1" aria-label="Posts pagination">
         <Button
           variant="outline"
           size="sm"

@@ -125,7 +125,7 @@ export class PostsController {
     @Param('postId')
     postId: string,
   ) {
-    await this.postsService.deleteDraft(workspaceId, postId);
+    await this.postsService.deletePost(workspaceId, postId);
 
     return {
       success: true,

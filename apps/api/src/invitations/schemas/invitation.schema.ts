@@ -1,12 +1,16 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 import { Role } from '../../common/enums/role.enum';
 
 export type InvitationDocument = HydratedDocument<Invitation>;
 
 @Schema({ timestamps: true })
 export class Invitation {
-  @Prop({ type: Types.ObjectId, ref: 'Workspace', required: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Workspace',
+    required: true,
+  })
   workspaceId: Types.ObjectId;
 
   @Prop({ required: true, lowercase: true, trim: true })
@@ -21,7 +25,7 @@ export class Invitation {
   @Prop({ required: true })
   expiresAt: Date;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true })
+  @Prop({ type: MongooseSchema.Types.ObjectId, ref: 'User', required: true })
   invitedBy: Types.ObjectId;
 
   @Prop({ default: null })

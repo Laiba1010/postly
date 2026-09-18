@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 import { SocialProvider } from '../enums/provider.enum';
 import { ConnectionStatus } from '../enums/connection-status.enum';
 
@@ -10,7 +10,11 @@ export type SocialConnectionDocument = HydratedDocument<SocialConnection> & {
 
 @Schema({ timestamps: true })
 export class SocialConnection {
-  @Prop({ type: Types.ObjectId, ref: 'Workspace', required: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Workspace',
+    required: true,
+  })
   workspaceId: Types.ObjectId;
 
   @Prop({ type: String, enum: SocialProvider, required: true })

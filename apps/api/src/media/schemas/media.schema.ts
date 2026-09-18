@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 import { MediaType } from '../enums/media-type.enum';
 
 export type MediaDocument = HydratedDocument<Media> & {
@@ -23,10 +23,20 @@ export const MediaMetadataSchema = SchemaFactory.createForClass(MediaMetadata);
 
 @Schema({ timestamps: true })
 export class Media {
-  @Prop({ type: Types.ObjectId, ref: 'Workspace', required: true, index: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Workspace',
+    required: true,
+    index: true,
+  })
   workspaceId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true,
+  })
   uploadedBy: Types.ObjectId;
 
   @Prop({ required: true })
@@ -46,7 +56,12 @@ export class Media {
 
   // null = not yet attached to any saved post (an "orphan candidate").
   // Set once a draft referencing this media is actually saved.
-  @Prop({ type: Types.ObjectId, ref: 'Post', default: null, index: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Post',
+    default: null,
+    index: true,
+  })
   postId: Types.ObjectId | null;
 
   @Prop({ type: MediaMetadataSchema, default: null })

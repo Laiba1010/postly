@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { Types } from 'mongoose';
+import { Types, Schema as MongooseSchema } from 'mongoose';
 import { SocialProvider } from '../../social-connections/enums/provider.enum';
 
 @Schema({ _id: false })
@@ -7,7 +7,11 @@ export class PostDestination {
   @Prop({ type: String, enum: SocialProvider, required: true })
   provider: SocialProvider;
 
-  @Prop({ type: Types.ObjectId, ref: 'SocialConnection', required: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'SocialConnection',
+    required: true,
+  })
   socialConnectionId: Types.ObjectId;
 
   // Denormalized snapshot for display only (avoids a join just to render

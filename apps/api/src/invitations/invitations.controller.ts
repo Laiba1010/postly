@@ -6,7 +6,9 @@ import {
   Param,
   Post,
   UseGuards,
+  HttpCode,
 } from '@nestjs/common';
+
 import { AuthGuard } from '../auth/guards/auth.guard';
 import { WorkspaceGuard } from '../workspaces/guards/workspace.guard';
 import { RolesGuard } from '../common/guards/roles.guard';
@@ -54,6 +56,7 @@ export class InvitationsController {
   }
 
   @Post('invitations/:token/accept')
+  @HttpCode(200)
   @UseGuards(AuthGuard)
   async accept(@Param('token') token: string, @CurrentUser() user: PublicUser) {
     await this.invitationsService.acceptInvitation(token, user.id, user.email);

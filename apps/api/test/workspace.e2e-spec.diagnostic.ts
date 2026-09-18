@@ -1,11 +1,9 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { getModelToken } from '@nestjs/mongoose';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
 import { Test, TestingModule } from '@nestjs/testing';
 import cookieParser from 'cookie-parser';
-import { Types } from 'mongoose';
-
-import Redis from 'ioredis';
+import mongoose from 'mongoose';
 import request from 'supertest';
 
 import { AllExceptionsFilter } from '../src/common/filters/all-exceptions.filter';
@@ -15,6 +13,7 @@ import { Workspace } from '../src/workspaces/schemas/workspace.schema';
 import { Membership } from '../src/memberships/schemas/membership.schema';
 import { Role } from '../src/common/enums/role.enum';
 import { InvitationsService } from '../src/invitations/invitations.service';
+import { Types } from 'mongoose';
 
 jest.setTimeout(30000);
 
@@ -36,7 +35,8 @@ describe('Workspace & Team Management (e2e)', () => {
   let workspaceModel: any;
   let membershipModel: any;
   let invitationsService: InvitationsService;
-  let redis: Redis;
+  let membershipChangeStream: any = null;
+  const trackedMembershipIds = new Set<string>();
 
   const origin = process.env.CORS_ORIGIN!;
 
@@ -51,26 +51,6 @@ describe('Workspace & Team Management (e2e)', () => {
   const protectionWorkspaceName = `Phase 3 Protection ${timestamp}`;
 
   let inviteEmailForCleanup: string | null = null;
-
-  async function clearThrottleKeys() {
-    let cursor = '0';
-
-    do {
-      const [nextCursor, keys] = await redis.scan(
-        cursor,
-        'MATCH',
-        'throttle:*',
-        'COUNT',
-        100,
-      );
-
-      cursor = nextCursor;
-
-      if (keys.length > 0) {
-        await redis.del(...keys);
-      }
-    } while (cursor !== '0');
-  }
 
   async function signup(email: string, name: string) {
     const agent = request.agent(app.getHttpServer());
@@ -89,6 +69,82 @@ describe('Workspace & Team Management (e2e)', () => {
   }
 
   beforeAll(async () => {
+    /*
+     * Enable Mongoose debug logging only for Membership operations.
+     *
+     * The goal is to catch an unexpected deleteOne/deleteMany operation
+     * occurring when the second membership is created.
+     */
+    mongoose.set('debug', (collectionName, method, ...args) => {
+      if (collectionName !== 'memberships' && collectionName !== 'membership') {
+        return;
+      }
+
+      const safeValue = (value: any): any => {
+        if (value === null || value === undefined) {
+          return value;
+        }
+
+        if (value instanceof mongoose.Types.ObjectId) {
+          return value.toString();
+        }
+
+        if (value instanceof Date) {
+          return value.toISOString();
+        }
+
+        if (Array.isArray(value)) {
+          return value.map(safeValue);
+        }
+
+        if (typeof value !== 'object') {
+          return value;
+        }
+
+        /*
+         * Mongo/Mongoose options can contain ClientSession, MongoClient,
+         * collection objects, etc. Do not recursively serialize those.
+         */
+        if (
+          value.constructor?.name === 'ClientSession' ||
+          value.constructor?.name === 'MongoClient' ||
+          value.constructor?.name === 'ServerSessionPool'
+        ) {
+          return `[${value.constructor.name}]`;
+        }
+
+        const result: Record<string, any> = {};
+
+        for (const [key, nestedValue] of Object.entries(value)) {
+          /*
+           * Skip known MongoDB internal/session properties.
+           */
+          if (
+            key === 'session' ||
+            key === 'client' ||
+            key === 'db' ||
+            key === 'collection'
+          ) {
+            continue;
+          }
+
+          try {
+            result[key] = safeValue(nestedValue);
+          } catch {
+            result[key] = '[Unserializable]';
+          }
+        }
+
+        return result;
+      };
+
+      console.error(
+        '[MONGOOSE MEMBERSHIP DEBUG]',
+        method,
+        JSON.stringify(args.map(safeValue), null, 2),
+      );
+    });
+
     const { AppModule } = await import('../src/app.module');
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
@@ -125,13 +181,76 @@ describe('Workspace & Team Management (e2e)', () => {
     membershipModel = app.get(getModelToken(Membership.name));
     invitationsService = app.get(InvitationsService);
 
+    const membershipIndexes = await membershipModel.collection.indexes();
+
+    console.error(
+      'MEMBERSHIP INDEXES:',
+      JSON.stringify(membershipIndexes, null, 2),
+    );
+
     await app.init();
 
-    redis = new Redis(configService.get<string>('REDIS_URL')!);
-  });
+    const mongoConnection = app.get(getConnectionToken());
+    const membershipDb = membershipModel.db;
+    const membershipCollection = membershipModel.collection;
+    console.error(
+      '[MONGO MEMBERSHIP WATCH] connection identity',
+      JSON.stringify({
+        connectionName: mongoConnection.name,
+        databaseName: membershipDb.name,
+        collectionName: membershipCollection.name,
+        host: membershipDb.host,
+      }),
+    );
 
-  beforeEach(async () => {
-    await clearThrottleKeys();
+    membershipChangeStream = membershipCollection.watch([], {
+      fullDocument: 'updateLookup',
+    });
+
+    membershipChangeStream.on('change', (change: any) => {
+      const id = change?.documentKey?._id?.toString?.() ?? null;
+      const tracked = id !== null && trackedMembershipIds.has(id);
+      const prefix = tracked
+        ? '[MONGO MEMBERSHIP TARGET]'
+        : '[MONGO MEMBERSHIP CHANGE]';
+
+      const safe = (value: any): any => {
+        if (value === null || value === undefined) return value;
+        if (value instanceof mongoose.Types.ObjectId) return value.toString();
+        if (value instanceof Date) return value.toISOString();
+        if (Array.isArray(value)) return value.map(safe);
+        if (typeof value !== 'object') return value;
+        const out: Record<string, any> = {};
+        for (const [key, nested] of Object.entries(value)) {
+          try {
+            out[key] = safe(nested);
+          } catch {
+            out[key] = '[Unserializable]';
+          }
+        }
+        return out;
+      };
+
+      console.error(
+        `${prefix} ${String(change.operationType).toUpperCase()}`,
+        JSON.stringify(
+          {
+            operationType: change.operationType,
+            documentKey: safe(change.documentKey),
+            clusterTime: safe(change.clusterTime),
+            namespace: safe(change.ns),
+            fullDocument: safe(change.fullDocument),
+            updateDescription: safe(change.updateDescription),
+          },
+          null,
+          2,
+        ),
+      );
+    });
+
+    membershipChangeStream.on('error', (error: Error) => {
+      console.error('[MONGO MEMBERSHIP WATCH] ERROR', error);
+    });
   });
 
   afterAll(async () => {
@@ -178,8 +297,13 @@ describe('Workspace & Team Management (e2e)', () => {
         });
       }
     } finally {
-      if (redis) {
-        await redis.quit();
+      if (membershipChangeStream) {
+        try {
+          await membershipChangeStream.close();
+        } catch (error) {
+          console.error('[MONGO MEMBERSHIP WATCH] CLOSE ERROR', error);
+        }
+        membershipChangeStream = null;
       }
 
       if (app) {
@@ -205,9 +329,31 @@ describe('Workspace & Team Management (e2e)', () => {
       .expect(201);
 
     const workspaceAId = createA.body.workspace.id;
+    const nativeMemberships = await membershipModel.collection
+      .find({
+        workspaceId: new Types.ObjectId(workspaceAId),
+      })
+      .toArray();
+
+    console.error(
+      'NATIVE MEMBERSHIPS AFTER CREATE A:',
+      JSON.stringify(nativeMemberships, null, 2),
+    );
+
+    const mongooseMemberships = await membershipModel
+      .find({
+        workspaceId: new Types.ObjectId(workspaceAId),
+      })
+      .lean()
+      .exec();
+
+    console.error(
+      'MONGOOSE MEMBERSHIPS AFTER CREATE A:',
+      JSON.stringify(mongooseMemberships, null, 2),
+    );
 
     /*
-     * Verify Workspace A starts with exactly one Owner membership.
+     * Immediately inspect Workspace A memberships.
      */
     const afterCreateA = await membershipModel
       .find({
@@ -216,8 +362,21 @@ describe('Workspace & Team Management (e2e)', () => {
       .lean()
       .exec();
 
+    console.error('AFTER CREATE A:', JSON.stringify(afterCreateA, null, 2));
+
     expect(afterCreateA).toHaveLength(1);
     expect(afterCreateA[0].role).toBe(Role.OWNER);
+    const workspaceAOwnerMembershipId = afterCreateA[0]._id.toString();
+    trackedMembershipIds.add(workspaceAOwnerMembershipId);
+    console.error(
+      '[MONGO MEMBERSHIP TARGET] TRACK OWNER',
+      workspaceAOwnerMembershipId,
+    );
+
+    console.error(
+      '[MONGO MEMBERSHIP TARGET] BEFORE CREATE B',
+      JSON.stringify({ membershipId: workspaceAOwnerMembershipId }),
+    );
 
     /*
      * Create Workspace B.
@@ -231,20 +390,132 @@ describe('Workspace & Team Management (e2e)', () => {
       .expect(201);
 
     const workspaceBId = createB.body.workspace.id;
+    await new Promise((resolve) => setTimeout(resolve, 250));
 
     /*
-     * Verify Workspace A's Owner membership survived
-     * creation of Workspace B.
+     * DIAGNOSTIC BLOCK
+     *
+     * The Owner membership was present immediately after Workspace A was
+     * created, but the existing check after Workspace B is created returned
+     * an empty array. The earlier checks used an ObjectId while that failing
+     * check used the raw string workspaceAId.
+     *
+     * Do not change production code yet. Compare the exact same document using:
+     * 1. Native Mongo query + ObjectId workspaceId
+     * 2. Mongoose query + ObjectId workspaceId
+     * 3. Mongoose query + string workspaceId
+     * 4. Mongoose lookup by the captured membership _id
+     * 5. Native Mongo lookup by the captured membership _id
+     *
+     * If #1/#2/#4/#5 find the Owner membership but #3 does not, the issue is
+     * in the query/casting path rather than the membership being deleted.
      */
-    const afterCreateB = await membershipModel
+    const workspaceAObjectId = new Types.ObjectId(workspaceAId);
+    const workspaceAOwnerObjectId = new Types.ObjectId(
+      workspaceAOwnerMembershipId,
+    );
+
+    const afterCreateBNativeObjectId = await membershipModel.collection
       .find({
-        workspaceId: new Types.ObjectId(workspaceAId),
+        workspaceId: workspaceAObjectId,
+      })
+      .toArray();
+
+    const afterCreateBMongooseObjectId = await membershipModel
+      .find({
+        workspaceId: workspaceAObjectId,
       })
       .lean()
       .exec();
 
-    expect(afterCreateB).toHaveLength(1);
-    expect(afterCreateB[0].role).toBe(Role.OWNER);
+    const afterCreateBMongooseString = await membershipModel
+      .find({
+        workspaceId: workspaceAId,
+      })
+      .lean()
+      .exec();
+
+    const afterCreateBMongooseById = await membershipModel
+      .findById(workspaceAOwnerObjectId)
+      .lean()
+      .exec();
+
+    const afterCreateBNativeById = await membershipModel.collection.findOne({
+      _id: workspaceAOwnerObjectId,
+    });
+
+    console.error(
+      '[AFTER B IDENTITY]',
+      JSON.stringify(
+        {
+          modelConnectionName: membershipModel.db.name,
+          databaseName: membershipModel.db.db?.databaseName,
+          collectionName: membershipModel.collection.name,
+          workspaceAId,
+          workspaceAIdType: typeof workspaceAId,
+          workspaceAObjectId: workspaceAObjectId.toString(),
+          workspaceAOwnerMembershipId,
+          workspaceAOwnerObjectId: workspaceAOwnerObjectId.toString(),
+        },
+        null,
+        2,
+      ),
+    );
+
+    const serializeMongoValue = (value: any): any => {
+      if (value === null || value === undefined) return value;
+      if (value instanceof mongoose.Types.ObjectId) return value.toString();
+      if (value instanceof Date) return value.toISOString();
+      if (Array.isArray(value)) return value.map(serializeMongoValue);
+      if (typeof value !== 'object') return value;
+
+      const output: Record<string, any> = {};
+      for (const [key, nestedValue] of Object.entries(value)) {
+        try {
+          output[key] = serializeMongoValue(nestedValue);
+        } catch {
+          output[key] = '[Unserializable]';
+        }
+      }
+      return output;
+    };
+
+    console.error(
+      '[AFTER B DIAGNOSTIC] NATIVE OBJECTID QUERY:',
+      JSON.stringify(serializeMongoValue(afterCreateBNativeObjectId), null, 2),
+    );
+
+    console.error(
+      '[AFTER B DIAGNOSTIC] MONGOOSE OBJECTID QUERY:',
+      JSON.stringify(
+        serializeMongoValue(afterCreateBMongooseObjectId),
+        null,
+        2,
+      ),
+    );
+
+    console.error(
+      '[AFTER B DIAGNOSTIC] MONGOOSE STRING QUERY:',
+      JSON.stringify(serializeMongoValue(afterCreateBMongooseString), null, 2),
+    );
+
+    console.error(
+      '[AFTER B DIAGNOSTIC] MONGOOSE _ID QUERY:',
+      JSON.stringify(serializeMongoValue(afterCreateBMongooseById), null, 2),
+    );
+
+    console.error(
+      '[AFTER B DIAGNOSTIC] NATIVE _ID QUERY:',
+      JSON.stringify(serializeMongoValue(afterCreateBNativeById), null, 2),
+    );
+
+    /*
+     * Keep the assertion on the native/ObjectId result for now. This tells us
+     * whether the Owner membership actually exists in MongoDB after Workspace
+     * B creation without depending on the suspect string query.
+     */
+    expect(afterCreateBNativeObjectId).toHaveLength(1);
+    expect(afterCreateBNativeObjectId[0].role).toBe(Role.OWNER);
 
     /*
      * Verify cross-workspace access is blocked.
@@ -280,22 +551,44 @@ describe('Workspace & Team Management (e2e)', () => {
     expect(otherUserRecord).toBeDefined();
 
     /*
-     * Verify Owner membership immediately before
-     * creating User B's membership.
+     * IMPORTANT DIAGNOSTIC #1
+     *
+     * Verify Owner membership immediately BEFORE creating
+     * User B's membership.
      */
     const beforeSecondMembership = await membershipModel
       .find({
-        workspaceId: new Types.ObjectId(workspaceAId),
+        workspaceId: workspaceAId,
       })
       .lean()
       .exec();
+
+    console.error(
+      'BEFORE SECOND MEMBERSHIP:',
+      JSON.stringify(beforeSecondMembership, null, 2),
+    );
 
     expect(beforeSecondMembership).toHaveLength(1);
     expect(beforeSecondMembership[0].role).toBe(Role.OWNER);
 
     /*
+     * IMPORTANT DIAGNOSTIC #2
+     *
      * Create User B's membership through Mongoose.
      */
+    console.error(
+      'CREATING SECOND MEMBERSHIP:',
+      JSON.stringify(
+        {
+          userId: otherUserRecord!._id.toString(),
+          workspaceId: workspaceAId,
+          role: Role.VIEWER,
+        },
+        null,
+        2,
+      ),
+    );
+
     const createdMembership = await membershipModel.create({
       userId: otherUserRecord!._id,
       workspaceId: workspaceAId,
@@ -305,49 +598,101 @@ describe('Workspace & Team Management (e2e)', () => {
     expect(createdMembership).toBeDefined();
 
     /*
-     * Verify both memberships physically exist.
+     * IMPORTANT DIAGNOSTIC #3
+     *
+     * Inspect raw MongoDB collection directly.
+     *
+     * This bypasses Mongoose query helpers/population.
      */
-    const membershipsAfterCreate = await membershipModel
+    const rawAfterMongooseCreate = await membershipModel.collection
       .find({
-        workspaceId: new Types.ObjectId(workspaceAId),
+        workspaceId: new mongoose.Types.ObjectId(workspaceAId),
+      })
+      .toArray();
+
+    console.error(
+      'RAW COLLECTION AFTER MONGOOSE CREATE:',
+      JSON.stringify(
+        rawAfterMongooseCreate,
+        (_key, value) => {
+          if (value instanceof mongoose.Types.ObjectId) {
+            return value.toString();
+          }
+
+          if (value instanceof Date) {
+            return value.toISOString();
+          }
+
+          return value;
+        },
+        2,
+      ),
+    );
+
+    /*
+     * IMPORTANT DIAGNOSTIC #4
+     *
+     * Normal Mongoose query after create.
+     */
+    const afterMongooseCreate = await membershipModel
+      .find({
+        workspaceId: workspaceAId,
       })
       .lean()
       .exec();
 
-    expect(membershipsAfterCreate).toHaveLength(2);
+    console.error(
+      'MONGOOSE QUERY AFTER CREATE:',
+      JSON.stringify(afterMongooseCreate, null, 2),
+    );
+
+    /*
+     * The Owner should still exist.
+     */
+    expect(afterMongooseCreate).toHaveLength(2);
 
     /*
      * Verify both roles.
      */
-    const roles = membershipsAfterCreate
+    const roles = afterMongooseCreate
       .map((membership: any) => membership.role)
       .sort();
 
     expect(roles).toEqual([Role.OWNER, Role.VIEWER].sort());
 
     /*
-     * Verify both membership references resolve to Users.
+     * Verify that both membership references resolve to Users.
      */
-    const membershipsWithUsers = await membershipModel
+    const debugMemberships = await membershipModel
       .find({
-        workspaceId: new Types.ObjectId(workspaceAId),
+        workspaceId: workspaceAId,
       })
       .populate('userId')
       .lean()
       .exec();
 
-    expect(membershipsWithUsers).toHaveLength(2);
+    console.error(
+      'DEBUG MEMBERSHIPS WITH USERS:',
+      JSON.stringify(debugMemberships, null, 2),
+    );
 
-    for (const membership of membershipsWithUsers) {
+    expect(debugMemberships).toHaveLength(2);
+
+    for (const membership of debugMemberships) {
       expect(membership.userId).toBeDefined();
     }
 
     /*
-     * Verify real HTTP endpoint returns both members.
+     * Real HTTP endpoint.
      */
     const memberList = await owner
       .get(`/api/workspaces/${workspaceAId}/members`)
       .expect(200);
+
+    console.error(
+      'MEMBERS RESPONSE:',
+      JSON.stringify(memberList.body.members, null, 2),
+    );
 
     expect(memberList.body.members).toHaveLength(2);
 
@@ -359,7 +704,7 @@ describe('Workspace & Team Management (e2e)', () => {
     expect(viewer.role).toBe(Role.VIEWER);
 
     /*
-     * Owner can create an invitation.
+     * Invitation controller test.
      */
     const controllerInviteEmail = `phase3-controller-invite-${Date.now()}@example.com`;
 
@@ -373,6 +718,7 @@ describe('Workspace & Team Management (e2e)', () => {
       .expect(201)
       .expect(({ body }) => {
         expect(body.invitation.email).toBe(controllerInviteEmail);
+
         expect(body.invitation.role).toBe(Role.EDITOR);
       });
 
@@ -452,7 +798,7 @@ describe('Workspace & Team Management (e2e)', () => {
 
     const acceptedMember = await membershipModel
       .findOne({
-        workspaceId: new Types.ObjectId(workspaceAId),
+        workspaceId: workspaceAId,
         userId: inviteUserRecord!._id,
       })
       .lean()
@@ -600,8 +946,8 @@ describe('Workspace & Team Management (e2e)', () => {
      */
     const membershipAfterAttempts = await membershipModel
       .findOne({
-        _id: new Types.ObjectId(ownerMembershipId),
-        workspaceId: new Types.ObjectId(workspaceId),
+        _id: ownerMembershipId,
+        workspaceId,
       })
       .lean()
       .exec();
@@ -613,11 +959,11 @@ describe('Workspace & Team Management (e2e)', () => {
      * Cleanup this workspace immediately.
      */
     await membershipModel.deleteOne({
-      _id: new Types.ObjectId(ownerMembershipId),
+      _id: ownerMembershipId,
     });
 
     await workspaceModel.deleteOne({
-      _id: new Types.ObjectId(workspaceId),
+      _id: workspaceId,
     });
 
     await userModel.deleteOne({

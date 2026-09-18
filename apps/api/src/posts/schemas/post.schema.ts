@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 import { PostStatus } from '../enums/post-status.enum';
 import {
   PostDestination,
@@ -13,10 +13,20 @@ export type PostDocument = HydratedDocument<Post> & {
 
 @Schema({ timestamps: true })
 export class Post {
-  @Prop({ type: Types.ObjectId, ref: 'Workspace', required: true, index: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'Workspace',
+    required: true,
+    index: true,
+  })
   workspaceId: Types.ObjectId;
 
-  @Prop({ type: Types.ObjectId, ref: 'User', required: true, index: true })
+  @Prop({
+    type: MongooseSchema.Types.ObjectId,
+    ref: 'User',
+    required: true,
+    index: true,
+  })
   authorId: Types.ObjectId;
 
   @Prop({ default: '' })
@@ -33,7 +43,10 @@ export class Post {
   @Prop({ type: [PostDestinationSchema], default: [] })
   destinations: PostDestination[];
 
-  @Prop({ type: [{ type: Types.ObjectId, ref: 'Media' }], default: [] })
+  @Prop({
+    type: [{ type: MongooseSchema.Types.ObjectId, ref: 'Media' }],
+    default: [],
+  })
   mediaIds: Types.ObjectId[];
 
   // Unused in Phase 6 — reserved exactly as the architecture defines them

@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 import { PublishingAttemptStatus } from '../enums/publishing-attempt-status.enum';
 import { PublishFailureReason } from '../../mock-platform/enums/publish-failure-reason.enum';
 
@@ -10,7 +10,7 @@ export type PublishingAttemptDocument = HydratedDocument<PublishingAttempt> & {
 @Schema({ timestamps: { createdAt: true, updatedAt: false } })
 export class PublishingAttempt {
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'PostTarget',
     required: true,
     index: true,

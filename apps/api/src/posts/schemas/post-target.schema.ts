@@ -1,5 +1,5 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
-import { HydratedDocument, Types } from 'mongoose';
+import { HydratedDocument, Types, Schema as MongooseSchema } from 'mongoose';
 
 import { SocialProvider } from '../../social-connections/enums/provider.enum';
 import { PostTargetStatus } from '../enums/post-target-status.enum';
@@ -12,7 +12,7 @@ export type PostTargetDocument = HydratedDocument<PostTarget> & {
 @Schema({ timestamps: true })
 export class PostTarget {
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'Post',
     required: true,
     index: true,
@@ -20,7 +20,7 @@ export class PostTarget {
   postId: Types.ObjectId;
 
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'Workspace',
     required: true,
   })
@@ -34,7 +34,7 @@ export class PostTarget {
   platform: SocialProvider;
 
   @Prop({
-    type: Types.ObjectId,
+    type: MongooseSchema.Types.ObjectId,
     ref: 'SocialConnection',
     required: true,
   })
